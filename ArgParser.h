@@ -29,14 +29,13 @@ namespace Parser
 		UNKNOWN_VALUE,
 		DEFAULT_ALREADY_SET,
 		REQ_POS_AFTER_OPTIONAL,
-		MIN_COUNT_NOT_SET,
-		MAX_COUNT_NOT_SET,
 		MIN_GREATER_MAX,
-		CARDINALITY_INCOMPATIBLE,
+		CARDINALITY_ALREADY_SET,
+		COUNT_ZERO,
 		NO_CARDINALITY_SET,
 		HELP_QUERY,
 		NAME_ALREADY_USED,
-		CARDINALITY_ERROR,
+		CARDINALITY_VALIDATION_FAIL,
 	};
 
 	bool Parse(std::string_view v, int64_t& out);
@@ -187,19 +186,30 @@ namespace Parser
 
 		Aggregate<T>& Required();
 		Aggregate<T>& Default(const std::vector<T>& default_value);
-		Aggregate<T>& Count(size_t count);
-		Aggregate<T>& MinCount(size_t count);
-		Aggregate<T>& MaxCount(size_t count);
-		Aggregate<T>& Unlimited();
 		Aggregate<T>& Help(std::string_view help_msg);
+
+		Aggregate<T>& Exactly(size_t count);
+		Aggregate<T>& Between(size_t min, size_t max);
+		Aggregate<T>& AtLeast(size_t count);
+		Aggregate<T>& AtMost(size_t count);
+		Aggregate<T>& Unlimited();
 
 	protected:
 		void Finalize() override;
 		void AppendValue(std::string_view val) override;
 
 	private:
+		enum class Cardinality
+		{
+			UNLIMITED,
+			BETWEEN,
+			EXACTLY,
+			ATLEAST,
+			ATMOST,
+			UNSET,
+		};
+
 		Error ApplyCardinality();
-		Error ValidateCardinality();
 
 		using TextValidator = std::function<bool(std::string_view)>;
 		using ValueValidator = std::function<bool(const T&)>;
@@ -220,7 +230,7 @@ namespace Parser
 		size_t m_exact_count = 0;
 		size_t m_min_count = 0;
 		size_t m_max_count = 0;
-		bool m_unlimited = false;
+		Cardinality m_card = Cardinality::UNSET;
 	};
 
 	class ArgParser
@@ -608,40 +618,14 @@ namespace Parser
 	}
 
 	template<Parseable T>
-	inline Aggregate<T>& Aggregate<T>::Count(size_t count)
-	{
-		if (m_locked)
-			return *this;
-		m_exact_count = count;
-		return *this;
-	}
-
-	template<Parseable T>
-	inline Aggregate<T>& Aggregate<T>::MinCount(size_t count)
-	{
-		if (m_locked)
-			return *this;
-		m_min_count = count;
-		return *this;
-	}
-
-	template<Parseable T>
-	inline Aggregate<T>& Aggregate<T>::MaxCount(size_t count)
-	{
-		if (m_locked)
-			return *this;
-		m_max_count = count;
-		return *this;
-	}
-
-	template<Parseable T>
 	inline Aggregate<T>& Aggregate<T>::Unlimited()
 	{
 		if (m_locked)
 			return *this;
-		m_unlimited = true;
-		if (m_min_count == 0)
-			m_min_count = 1;
+		if (m_card != Cardinality::UNSET)
+			m_error = Error::CARDINALITY_ALREADY_SET;
+		else
+			m_card = Cardinality::UNLIMITED;
 		return *this;
 	}
 
@@ -701,6 +685,77 @@ namespace Parser
 	}
 
 	template<Parseable T>
+	inline Aggregate<T>& Aggregate<T>::Exactly(size_t count)
+	{
+		if (m_locked)
+			return *this;
+		if (m_card != Cardinality::UNSET)
+			m_error = Error::CARDINALITY_ALREADY_SET;
+		else if (count == 0)
+			m_error = Error::COUNT_ZERO;
+		else
+		{
+			m_card = Cardinality::EXACTLY;
+			m_exact_count = count;
+		}
+		return *this;
+	}
+
+	template<Parseable T>
+	inline Aggregate<T>& Aggregate<T>::Between(size_t min, size_t max)
+	{
+		if (m_locked)
+			return *this;
+		if (m_card != Cardinality::UNSET)
+			m_error = Error::CARDINALITY_ALREADY_SET;
+		else if (min == 0 || max == 0)
+			m_error = Error::COUNT_ZERO;
+		else if (max < min)
+			m_error = Error::MIN_GREATER_MAX;
+		else
+		{
+			m_card = Cardinality::BETWEEN;
+			m_min_count = min;
+			m_max_count = max;
+		}
+		return *this;
+	}
+
+	template<Parseable T>
+	inline Aggregate<T>& Aggregate<T>::AtLeast(size_t count)
+	{
+		if (m_locked)
+			return *this;
+		if (m_card != Cardinality::UNSET)
+			m_error = Error::CARDINALITY_ALREADY_SET;
+		else if (count == 0)
+			m_error = Error::COUNT_ZERO;
+		else
+		{
+			m_card = Cardinality::ATLEAST;
+			m_min_count = count;
+		}
+		return *this;
+	}
+
+	template<Parseable T>
+	inline Aggregate<T>& Aggregate<T>::AtMost(size_t count)
+	{
+		if (m_locked)
+			return *this;
+		if (m_card != Cardinality::UNSET)
+			m_error = Error::CARDINALITY_ALREADY_SET;
+		else if (count == 0)
+			m_error = Error::COUNT_ZERO;
+		else
+		{
+			m_card = Cardinality::ATMOST;
+			m_max_count = count;
+		}
+		return *this;
+	}
+
+	template<Parseable T>
 	inline void Aggregate<T>::Finalize()
 	{
 		if (m_locked || m_error != Error::SUCCESS)
@@ -708,9 +763,11 @@ namespace Parser
 
 		m_locked = true;
 
-		m_error = ValidateCardinality();
-		if (m_error != Error::SUCCESS)
+		if (m_card == Cardinality::UNSET)
+		{
+			m_error = Error::NO_CARDINALITY_SET;
 			return;
+		}
 
 		if (m_set)
 		{
@@ -795,38 +852,28 @@ namespace Parser
 	template<Parseable T>
 	inline Error Aggregate<T>::ApplyCardinality()
 	{
-		if (m_exact_count != 0 && m_parsed_vals.size() != m_exact_count)
-			return Error::CARDINALITY_ERROR;
-		else if (m_min_count != 0)
+		switch (m_card)
 		{
-			if (m_parsed_vals.size() < m_min_count)
-				return Error::CARDINALITY_ERROR;
-
-			if (!m_unlimited && m_max_count < m_parsed_vals.size())
-			{
-				return Error::CARDINALITY_ERROR;
-			}
-		}
-
-		return Error::SUCCESS;
-	}
-
-	template<Parseable T>
-	inline Error Aggregate<T>::ValidateCardinality()
-	{
-		if (m_exact_count == 0 && !m_unlimited && m_max_count == 0 && m_min_count == 0)
+		case Parser::Aggregate<T>::Cardinality::UNSET:
 			return Error::NO_CARDINALITY_SET;
-		else if (m_exact_count != 0 &&
-			(m_unlimited || m_max_count != 0 || m_min_count != 0))
-			return Error::CARDINALITY_INCOMPATIBLE;
-		else if (m_unlimited && m_max_count != 0)
-			return Error::CARDINALITY_INCOMPATIBLE;
-		else if (m_min_count != 0 && m_max_count == 0 && !m_unlimited)
-			return Error::MAX_COUNT_NOT_SET;
-		else if (m_max_count != 0 && m_min_count == 0)
-			return Error::MIN_COUNT_NOT_SET;
-		else if (m_max_count < m_min_count && !m_unlimited)
-			return Error::MIN_GREATER_MAX;
+			break;
+		case Parser::Aggregate<T>::Cardinality::BETWEEN:
+			if (m_parsed_vals.size() < m_min_count || m_parsed_vals.size() > m_max_count)
+				return Error::CARDINALITY_VALIDATION_FAIL;
+			break;
+		case Parser::Aggregate<T>::Cardinality::EXACTLY:
+			if (m_parsed_vals.size() != m_exact_count)
+				return Error::CARDINALITY_VALIDATION_FAIL;
+			break;
+		case Parser::Aggregate<T>::Cardinality::ATLEAST:
+			if (m_parsed_vals.size() < m_min_count)
+				return Error::CARDINALITY_VALIDATION_FAIL;
+			break;
+		case Parser::Aggregate<T>::Cardinality::ATMOST:
+			if (m_parsed_vals.size() > m_max_count)
+				return Error::CARDINALITY_VALIDATION_FAIL;
+			break;
+		}
 
 		return Error::SUCCESS;
 	}

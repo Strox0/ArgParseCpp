@@ -961,7 +961,7 @@ namespace parser_tests
 	{
 		SimulatedArgv args{ "--items", "1", "2", "3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Exactly(3);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK(items.Provided());
@@ -973,7 +973,7 @@ namespace parser_tests
 		SimulatedArgv args{ "-i", "4", "5" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& items =
-			parser.AddAggregate<std::int64_t>("--items", { "-i" }).Count(2);
+			parser.AddAggregate<std::int64_t>("--items", { "-i" }).Exactly(2);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK(items.Provided());
@@ -984,7 +984,7 @@ namespace parser_tests
 	{
 		SimulatedArgv args{ "--items=1", "2", "3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& aggr = parser.AddAggregate<std::int64_t>("--items").Count(3);
+		auto& aggr = parser.AddAggregate<std::int64_t>("--items").Exactly(3);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK_EQ(aggr.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
@@ -996,7 +996,7 @@ namespace parser_tests
 			"--items", "1", "2", "3", "--scale", "2.5", "--debug"
 		};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Exactly(3);
 		auto& scale = parser.Add<double>("--scale").Required();
 		auto& debug = parser.AddFlag("--debug");
 
@@ -1010,7 +1010,7 @@ namespace parser_tests
 	{
 		SimulatedArgv args{ "--items", "-1", "-2", "-3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Exactly(3);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ -1, -2, -3 }));
@@ -1020,9 +1020,7 @@ namespace parser_tests
 	{
 		SimulatedArgv args{ "--items", "1", "2", "3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& items = parser.AddAggregate<std::int64_t>("--items")
-			.MinCount(2)
-			.MaxCount(4);
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Between(2, 4);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
@@ -1032,9 +1030,7 @@ namespace parser_tests
 	{
 		SimulatedArgv args{ "--items", "1", "2", "3", "4", "5", "6" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& items = parser.AddAggregate<std::int64_t>("--items")
-			.MinCount(2)
-			.Unlimited();
+		auto& items = parser.AddAggregate<std::int64_t>("--items").AtLeast(2);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK_EQ(
@@ -1046,7 +1042,7 @@ namespace parser_tests
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& items = parser.AddAggregate<std::int64_t>("--items").Count(2);
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Exactly(2);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK_FALSE(items.Provided());
@@ -1057,7 +1053,7 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& items = parser.AddAggregate<std::int64_t>("--items")
-			.Count(2)
+			.Exactly(2)
 			.Default({ 7, 8 });
 
 		CHECK_ERROR(parser, Error::SUCCESS);
@@ -1070,7 +1066,7 @@ namespace parser_tests
 		SimulatedArgv args{ "--items", "1", "2" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& items = parser.AddAggregate<std::int64_t>("--items")
-			.Count(2)
+			.Exactly(2)
 			.Default({ 7, 8 });
 
 		CHECK_ERROR(parser, Error::SUCCESS);
@@ -1084,7 +1080,7 @@ namespace parser_tests
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& items = parser.AddAggregate<std::int64_t>("--items")
 			.Required()
-			.Count(2);
+			.Exactly(2);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK(items.Provided());
@@ -1094,7 +1090,7 @@ namespace parser_tests
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").Required().Count(2);
+		parser.AddAggregate<std::int64_t>("--items").Required().Exactly(2);
 
 		CHECK_ERROR(parser, Error::MISSING_REQUIRED);
 	}
@@ -1103,34 +1099,34 @@ namespace parser_tests
 	{
 		SimulatedArgv args{ "--items", "1", "2" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").Count(3);
+		parser.AddAggregate<std::int64_t>("--items").Exactly(3);
 
-		CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
+		CHECK_ERROR(parser, Error::CARDINALITY_VALIDATION_FAIL);
 	}
 
 	TEST(AggregateTooManyValues)
 	{
 		SimulatedArgv args{ "--items", "1", "2", "3", "4" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").MaxCount(3).MinCount(1);
+		parser.AddAggregate<std::int64_t>("--items").Between(1, 3);
 
-		CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
+		CHECK_ERROR(parser, Error::CARDINALITY_VALIDATION_FAIL);
 	}
 
 	TEST(AggregateBelowMinimum)
 	{
 		SimulatedArgv args{ "--items", "1" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").MinCount(2).Unlimited();
+		parser.AddAggregate<std::int64_t>("--items").AtLeast(2);
 
-		CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
+		CHECK_ERROR(parser, Error::CARDINALITY_VALIDATION_FAIL);
 	}
 
 	TEST(AggregateElementParseFailure)
 	{
 		SimulatedArgv args{ "--items", "1", "bad", "3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").Count(3);
+		parser.AddAggregate<std::int64_t>("--items").Exactly(3);
 
 		CHECK_ERROR(parser, Error::PARSE_FAIL);
 	}
@@ -1140,7 +1136,7 @@ namespace parser_tests
 		SimulatedArgv args{ "--items", "good", "bad2" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.AddAggregate<std::string>("--items")
-			.Count(2)
+			.Exactly(2)
 			.ValidateText(
 				[](std::string_view value)
 				{
@@ -1159,7 +1155,7 @@ namespace parser_tests
 		SimulatedArgv args{ "--items", "1", "-2", "3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.AddAggregate<std::int64_t>("--items")
-			.Count(3)
+			.Exactly(3)
 			.ValidateValue(
 				[](const std::int64_t& value)
 				{
@@ -1174,7 +1170,7 @@ namespace parser_tests
 		SimulatedArgv args{ "--items", "ONE", "TWO" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& items = parser.AddAggregate<std::string>("--items")
-			.Count(2)
+			.Exactly(2)
 			.Transform(
 				[](std::string& value)
 				{
@@ -1198,7 +1194,7 @@ namespace parser_tests
 		SimulatedArgv args{ "--items", "good", "reject" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.AddAggregate<std::string>("--items")
-			.Count(2)
+			.Exactly(2)
 			.Transform(
 				[](std::string& value)
 				{
@@ -1213,7 +1209,7 @@ namespace parser_tests
 		SimulatedArgv args{ "--items", "1", "2", "3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& items = parser.AddAggregate<std::int64_t>("--items")
-			.Count(3)
+			.Exactly(3)
 			.ValidateCollection(
 				[](const std::vector<std::int64_t>& values)
 				{
@@ -1230,7 +1226,7 @@ namespace parser_tests
 		SimulatedArgv args{ "--items", "1", "2", "3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.AddAggregate<std::int64_t>("--items")
-			.Count(3)
+			.Exactly(3)
 			.ValidateCollection(
 				[](const std::vector<std::int64_t>& values)
 				{
@@ -1246,7 +1242,7 @@ namespace parser_tests
 		SimulatedArgv args{ "--items", "1", "2" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& items = parser.AddAggregate<std::int64_t>("--items")
-			.Count(2)
+			.Exactly(2)
 			.Help("Two integers.");
 
 		CHECK_ERROR(parser, Error::SUCCESS);
@@ -1302,7 +1298,7 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.AddAggregate<std::int64_t>("--items")
-			.Count(2)
+			.Exactly(2)
 			.Required()
 			.Default({ 1, 2 });
 
@@ -1323,7 +1319,7 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.AddAggregate<std::int64_t>("--items")
-			.Count(2)
+			.Exactly(2)
 			.Default({ 1, 2 })
 			.Default({ 3, 4 });
 
@@ -1399,59 +1395,20 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::NO_CARDINALITY_SET);
 	}
 
-	TEST(MinimumWithoutMaximumOrUnlimited)
+	TEST(CardinalityAlreadySetError)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").MinCount(2);
+		parser.AddAggregate<std::int64_t>("--items").Exactly(3).Unlimited();
 
-		CHECK_ERROR(parser, Error::MAX_COUNT_NOT_SET);
-	}
-
-	TEST(MaximumWithoutMinimum)
-	{
-		SimulatedArgv args{};
-		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").MaxCount(5);
-
-		CHECK_ERROR(parser, Error::MIN_COUNT_NOT_SET);
-	}
-
-	TEST(ExactCountClashesWithMinimum)
-	{
-		SimulatedArgv args{};
-		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").Count(3).MinCount(1);
-
-		CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
-	}
-
-	TEST(ExactCountClashesWithMaximum)
-	{
-		SimulatedArgv args{};
-		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").Count(3).MaxCount(5);
-
-		CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
-	}
-
-	TEST(MaximumClashesWithUnlimited)
-	{
-		SimulatedArgv args{};
-		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items")
-			.MinCount(1)
-			.MaxCount(5)
-			.Unlimited();
-
-		CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
+		CHECK_ERROR(parser, Error::CARDINALITY_ALREADY_SET);
 	}
 
 	TEST(MinimumGreaterThanMaximumIsCardinalityError)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").MinCount(5).MaxCount(2);
+		parser.AddAggregate<std::int64_t>("--items").Between(5, 4);
 
 		CHECK_ERROR(parser, Error::MIN_GREATER_MAX);
 	}
@@ -1548,8 +1505,7 @@ namespace parser_tests
 		auto& floats = parser.AddAggregate<double>("--floats")
 			.ValidateValue(positive_double)
 			.Required()
-			.MinCount(3)
-			.Unlimited();
+			.AtLeast(3);
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 
