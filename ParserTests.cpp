@@ -1456,6 +1456,18 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::MIN_GREATER_MAX);
 	}
 
+	TEST(ValueOr)
+	{
+		SimulatedArgv args{"--float", "9.7"};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& c = parser.Add<int32_t>("--count");
+		auto& f = parser.Add<double>("--float");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(c.ValueOr(5), 5);
+		CHECK_EQ(f.ValueOr(7.8), 9.7);
+	}
+
 	// -----------------------------------------------------------------------------
 	// Full example-style integration test
 	// -----------------------------------------------------------------------------

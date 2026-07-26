@@ -24,7 +24,6 @@ namespace Parser
 		VAL_VALIDATION_INVALID,
 		COL_VALIDATION_INVALID,
 		TRANSFORMATION_ERROR,
-		TOO_FEW_ARGS,
 		FLAG_AS_ARG,
 		MISSING_VALUE,
 		UNKNOWN_VALUE,
@@ -100,6 +99,8 @@ namespace Parser
 		
 		bool Provided() const;
 		T Value() const;
+		const T& ValueRef() const;
+		T ValueOr(const T& backup_val) const;
 
 		template <class Validation>
 		requires std::invocable<Validation&, std::string_view> &&
@@ -161,6 +162,8 @@ namespace Parser
 
 		bool Provided() const;
 		std::vector<T> Value() const;
+		const std::vector<T>& ValueRef() const;
+		std::vector<T> ValueOr(const std::vector<T>& backup_val);
 
 		template <class Validation>
 		requires std::invocable<Validation&, std::string_view>&&
@@ -378,6 +381,18 @@ namespace Parser
 			return T{};
 
 		return m_parsed_val;
+	}
+
+	template<Parseable T>
+	inline const T& Argument<T>::ValueRef() const
+	{
+		return m_parsed_val;
+	}
+
+	template<Parseable T>
+	inline T Argument<T>::ValueOr(const T& backup_val) const
+	{
+		return m_set ? m_parsed_val : backup_val;
 	}
 
 	template<Parseable T>
@@ -646,6 +661,18 @@ namespace Parser
 	inline std::vector<T> Aggregate<T>::Value() const
 	{
 		return m_parsed_vals;
+	}
+
+	template<Parseable T>
+	inline const std::vector<T>& Aggregate<T>::ValueRef() const
+	{
+		return m_parsed_vals;
+	}
+
+	template<Parseable T>
+	inline std::vector<T> Aggregate<T>::ValueOr(const std::vector<T>& backup_val)
+	{
+		return m_set ? m_parsed_vals : backup_val;
 	}
 
 	template<Parseable T>
