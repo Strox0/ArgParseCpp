@@ -272,6 +272,7 @@ namespace Parser
 		Error m_error;
 		std::string m_help;
 		std::unordered_set<std::string> m_names;
+		size_t m_option_stop;
 	};
 
 	template<typename T>

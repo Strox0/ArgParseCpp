@@ -1,11 +1,15 @@
 #include "ArgParser.h"
 #include <iostream>
 
-Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUCCESS)
+Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUCCESS), m_option_stop(std::numeric_limits<size_t>::max())
 {
-	for (int i = 1; i < argc; i++)
+	for (size_t i = 1; i < argc; i++)
 	{
 		std::string token = argv[i];
+		if (token == "--")
+		{
+			m_option_stop = i - 1;
+		}
 		size_t index = token.find('=');
 		if (index != token.npos)
 		{
@@ -15,6 +19,11 @@ Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUC
 				m_tokens.emplace_back(t1);
 			if (!t2.empty())
 				m_tokens.emplace_back(t2);
+
+			if (!t2.empty() && !t1.empty() && m_option_stop != std::numeric_limits<size_t>::max())
+				m_option_stop += 1;
+			else if (t2.empty() && t1.empty() && m_option_stop != std::numeric_limits<size_t>::max())
+				m_option_stop -= 1;
 		}
 		else
 			m_tokens.emplace_back(argv[i]);
@@ -105,7 +114,7 @@ Parser::Error Parser::ArgParser::ParseAndValidate(ErrorPolicy error_policy)
 			}
 		}
 
-		if (it != m_tokens.end())
+		if (it != m_tokens.end() && it < std::find(m_tokens.begin(),m_tokens.end(),"--"))
 		{
 			if (it + 1 != m_tokens.end())
 			{
@@ -138,13 +147,13 @@ Parser::Error Parser::ArgParser::ParseAndValidate(ErrorPolicy error_policy)
 			while (true)
 			{
 				auto it = std::find(m_tokens.begin(), m_tokens.end(), name);
-				if (it != m_tokens.end())
+				if (it != m_tokens.end() && it < std::find(m_tokens.begin(), m_tokens.end(), "--"))
 				{
 					std::vector<std::string>::iterator t = it;
 					while (true)
 					{
 						t++;
-						if (t == m_tokens.end() || m_names.contains(*t))
+						if (t == m_tokens.end() || m_names.contains(*t) || *t == "--")
 							break;
 						else
 							arg->AppendValue(*t);
@@ -155,6 +164,12 @@ Parser::Error Parser::ArgParser::ParseAndValidate(ErrorPolicy error_policy)
 					break;
 			}
 		}
+	}
+
+	{
+		auto it = std::find(m_tokens.begin(), m_tokens.end(), "--");
+		if (it != m_tokens.end())
+			m_tokens.erase(it);
 	}
 
 	for (size_t i = 0; i < m_positionals.size(); i++)

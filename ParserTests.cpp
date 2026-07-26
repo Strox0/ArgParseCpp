@@ -590,12 +590,12 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
 	}
 
-	TEST(DoubleDashSeparatorIsNotImplemented)
+	TEST(DoubleDashSeparatorIsImplemented)
 	{
 		SimulatedArgv args{ "--" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 
-		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+		CHECK_ERROR(parser, Error::SUCCESS);
 	}
 
 	TEST(HelpMetadataDoesNotAffectSuccessfulParsing)
@@ -1433,6 +1433,53 @@ namespace parser_tests
 		auto& f = parser.Add<double>("--float");
 
 		CHECK_ERROR(parser, Error::MISSING_VALUE);
+	}
+
+	TEST(DoubleDashNoOptionsOnlyPositional)
+	{
+		SimulatedArgv args{ "--","hello", "9" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& p1 = parser.AddPositional<std::string>("txt");
+		auto& p2 = parser.AddPositional<int32_t>("num");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(p1.Value(), "hello");
+		CHECK_EQ(p2.Value(), int32_t(9));
+	}
+
+	TEST(OptionsAfterDoubleDash)
+	{
+		SimulatedArgv args{ "--", "--count", "9.7" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& c = parser.Add<int32_t>("--count");
+		auto& p = parser.AddPositional<std::string>("c");
+		auto& p2 = parser.AddPositional<double>("num");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(p.Value(), "--count");
+		CHECK_EQ(p2.Value(), 9.7);
+	}
+
+	TEST(NothingAfterDoubleDash)
+	{
+		SimulatedArgv args{ "--float", "9.7", "--"};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& f = parser.Add<double>("--float");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(f.Value(), 9.7);
+	}
+
+
+	TEST(UnlimitedAggragateStopAtDoubleDash)
+	{
+		SimulatedArgv args{ "--float", "9.7", "9.7","9.7","9.7", "--", "hello" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& aggr = parser.AddAggregate<double>("--float").Unlimited();
+		auto& pos = parser.AddPositional<std::string>("h");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(pos.Value(), "hello");
 	}
 
 	// -----------------------------------------------------------------------------
