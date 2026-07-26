@@ -3,36 +3,18 @@
 
 Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUCCESS)
 {
-	std::string cmdline;
 	for (int i = 1; i < argc; i++)
 	{
-		cmdline += argv[i];
-		if (i + 1 < argc)
-			cmdline += ' ';
-	}
-
-	std::string token;
-	bool inside_quotes = false;
-	for (const auto& ch : cmdline)
-	{
-		if (ch == '"' || ch == '\'')
+		std::string token = argv[i];
+		size_t index = token.find('=');
+		if (index != token.npos)
 		{
-			inside_quotes = !inside_quotes;
-			continue;
-		}
-
-		if (ch == ' ' && !inside_quotes)
-		{
-			m_tokens.emplace_back(token);
-			token.clear();
+			m_tokens.emplace_back(token.substr(0, index));
+			m_tokens.emplace_back(token.substr(index + 1));
 		}
 		else
-		{
-			token += ch;
-		}
+			m_tokens.emplace_back(argv[i]);
 	}
-	if (!token.empty())
-		m_tokens.emplace_back(token);
 }
 
 Parser::Flag& Parser::ArgParser::AddFlag(std::string_view name, const std::vector<std::string>& aliases)
