@@ -337,7 +337,7 @@ namespace Parser
 			{
 				m_error = Error::NAME_ALREADY_USED;
 				m_aggregates.emplace_back(std::make_unique<Aggregate<T>>());
-				return *(Aggregate<T>*)m_args.back().get();
+				return *(Aggregate<T>*)m_aggregates.back().get();
 			}
 			else
 				m_names.insert(std::string(n));
