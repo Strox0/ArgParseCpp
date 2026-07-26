@@ -21,1583 +21,1601 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <chrono>
 
 namespace parser_tests
 {
 
-    class TestFailure final : public std::runtime_error
-    {
-    public:
-        using std::runtime_error::runtime_error;
-    };
+	class TestFailure final : public std::runtime_error
+	{
+	public:
+		using std::runtime_error::runtime_error;
+	};
 
-    class TestSkipped final : public std::runtime_error
-    {
-    public:
-        using std::runtime_error::runtime_error;
-    };
+	class TestSkipped final : public std::runtime_error
+	{
+	public:
+		using std::runtime_error::runtime_error;
+	};
 
-    [[noreturn]] void Fail(
-        const char* expression,
-        const char* file,
-        int line,
-        std::string_view detail = {})
-    {
-        std::ostringstream out;
-        out << file << ':' << line << ": check failed: " << expression;
-        if (!detail.empty())
-        {
-            out << " (" << detail << ')';
-        }
-        throw TestFailure(out.str());
-    }
+	[[noreturn]] void Fail(
+		const char* expression,
+		const char* file,
+		int line,
+		std::string_view detail = {})
+	{
+		std::ostringstream out;
+		out << file << ':' << line << ": check failed: " << expression;
+		if (!detail.empty())
+		{
+			out << " (" << detail << ')';
+		}
+		throw TestFailure(out.str());
+	}
 
 #define CHECK(expression)                                                        \
-    do                                                                           \
-    {                                                                            \
-        if (!(expression))                                                       \
-        {                                                                        \
-            ::parser_tests::Fail(#expression, __FILE__, __LINE__);              \
-        }                                                                        \
-    } while (false)
+	do                                                                           \
+	{                                                                            \
+		if (!(expression))                                                       \
+		{                                                                        \
+			::parser_tests::Fail(#expression, __FILE__, __LINE__);              \
+		}                                                                        \
+	} while (false)
 
 #define CHECK_FALSE(expression) CHECK(!(expression))
 
 #define CHECK_EQ(actual_expression, expected_expression)                         \
-    do                                                                           \
-    {                                                                            \
-        const auto& parser_test_actual = (actual_expression);                    \
-        const auto& parser_test_expected = (expected_expression);                \
-        if (!(parser_test_actual == parser_test_expected))                       \
-        {                                                                        \
-            ::parser_tests::Fail(                                                \
-                #actual_expression " == " #expected_expression,                 \
-                __FILE__,                                                        \
-                __LINE__);                                                       \
-        }                                                                        \
-    } while (false)
+	do                                                                           \
+	{                                                                            \
+		const auto& parser_test_actual = (actual_expression);                    \
+		const auto& parser_test_expected = (expected_expression);                \
+		if (!(parser_test_actual == parser_test_expected))                       \
+		{                                                                        \
+			::parser_tests::Fail(                                                \
+				#actual_expression " == " #expected_expression,                 \
+				__FILE__,                                                        \
+				__LINE__);                                                       \
+		}                                                                        \
+	} while (false)
 
 #define CHECK_NEAR(actual_expression, expected_expression, tolerance_expression) \
-    do                                                                           \
-    {                                                                            \
-        const long double parser_test_actual =                                   \
-            static_cast<long double>(actual_expression);                         \
-        const long double parser_test_expected =                                 \
-            static_cast<long double>(expected_expression);                       \
-        const long double parser_test_tolerance =                                \
-            static_cast<long double>(tolerance_expression);                      \
-        if (std::fabs(parser_test_actual - parser_test_expected) >                \
-            parser_test_tolerance)                                               \
-        {                                                                        \
-            ::parser_tests::Fail(                                                \
-                #actual_expression " ~= " #expected_expression,                 \
-                __FILE__,                                                        \
-                __LINE__);                                                       \
-        }                                                                        \
-    } while (false)
+	do                                                                           \
+	{                                                                            \
+		const long double parser_test_actual =                                   \
+			static_cast<long double>(actual_expression);                         \
+		const long double parser_test_expected =                                 \
+			static_cast<long double>(expected_expression);                       \
+		const long double parser_test_tolerance =                                \
+			static_cast<long double>(tolerance_expression);                      \
+		if (std::fabs(parser_test_actual - parser_test_expected) >                \
+			parser_test_tolerance)                                               \
+		{                                                                        \
+			::parser_tests::Fail(                                                \
+				#actual_expression " ~= " #expected_expression,                 \
+				__FILE__,                                                        \
+				__LINE__);                                                       \
+		}                                                                        \
+	} while (false)
 
 #define CHECK_ERROR(parser_expression, expected_error)                           \
-    CHECK_EQ((parser_expression).ValidateArgs(false), (expected_error))
+	CHECK_EQ((parser_expression).ValidateArgs(false), (expected_error))
 
-    class SimulatedArgv
-    {
-    public:
-        // The supplied strings are command-line fragments, not pre-split argv
-        // tokens. They are joined with spaces and tokenized the same way a user
-        // writes a command line: unquoted whitespace separates arguments, while
-        // single- or double-quoted text remains one argument.
-        //
-        // Examples:
-        //   { "--count 17" }         -> "--count", "17"
-        //   { "--count", "17" }     -> "--count", "17"
-        //   { R"(--name "two words")" } -> "--name", "two words"
-        //   { "--count=17" }         -> "--count=17" (one unsupported token)
-        SimulatedArgv(std::initializer_list<std::string_view> command_line_fragments)
-        {
-            std::string command_line;
-            for (const std::string_view fragment : command_line_fragments)
-            {
-                if (!command_line.empty())
-                {
-                    command_line.push_back(' ');
-                }
-                command_line.append(fragment);
-            }
+	class SimulatedArgv
+	{
+	public:
+		// The supplied strings are command-line fragments, not pre-split argv
+		// tokens. They are joined with spaces and tokenized the same way a user
+		// writes a command line: unquoted whitespace separates arguments, while
+		// single- or double-quoted text remains one argument.
+		//
+		// Examples:
+		//   { "--count 17" }         -> "--count", "17"
+		//   { "--count", "17" }     -> "--count", "17"
+		//   { R"(--name "two words")" } -> "--name", "two words"
+		//   { "--count=17" }         -> "--count=17" (one unsupported token)
+		SimulatedArgv(std::initializer_list<std::string_view> command_line_fragments)
+		{
+			std::string command_line;
+			for (const std::string_view fragment : command_line_fragments)
+			{
+				if (!command_line.empty())
+				{
+					command_line.push_back(' ');
+				}
+				command_line.append(fragment);
+			}
 
-            BuildFromCommandLine(command_line);
-        }
+			BuildFromCommandLine(command_line);
+		}
 
-        explicit SimulatedArgv(std::string_view command_line)
-        {
-            BuildFromCommandLine(command_line);
-        }
+		explicit SimulatedArgv(std::string_view command_line)
+		{
+			BuildFromCommandLine(command_line);
+		}
 
-        int argc() const
-        {
-            return static_cast<int>(m_storage.size());
-        }
+		int argc() const
+		{
+			return static_cast<int>(m_storage.size());
+		}
 
-        char** argv()
-        {
-            return m_pointers.data();
-        }
+		char** argv()
+		{
+			return m_pointers.data();
+		}
 
-    private:
-        void BuildFromCommandLine(std::string_view command_line)
-        {
-            m_storage.clear();
-            m_storage.emplace_back("parser-tests");
+	private:
+		void BuildFromCommandLine(std::string_view command_line)
+		{
+			m_storage.clear();
+			m_storage.emplace_back("parser-tests");
 
-            std::string current;
-            bool token_started = false;
-            char quote = '\0';
+			std::string current;
+			bool token_started = false;
+			char quote = '\0';
 
-            for (std::size_t index = 0; index < command_line.size(); ++index)
-            {
-                const char character = command_line[index];
+			for (std::size_t index = 0; index < command_line.size(); ++index)
+			{
+				const char character = command_line[index];
 
-                if (quote != '\0')
-                {
-                    if (character == quote)
-                    {
-                        quote = '\0';
-                    }
-                    else if (character == '\\' && index + 1 < command_line.size() &&
-                        command_line[index + 1] == quote)
-                    {
-                        current.push_back(command_line[++index]);
-                    }
-                    else
-                    {
-                        current.push_back(character);
-                    }
-                    token_started = true;
-                    continue;
-                }
+				if (quote != '\0')
+				{
+					if (character == quote)
+					{
+						quote = '\0';
+					}
+					else if (character == '\\' && index + 1 < command_line.size() &&
+						command_line[index + 1] == quote)
+					{
+						current.push_back(command_line[++index]);
+					}
+					else
+					{
+						current.push_back(character);
+					}
+					token_started = true;
+					continue;
+				}
 
-                if (character == '"' || character == '\'')
-                {
-                    quote = character;
-                    token_started = true;
-                }
-                else if (std::isspace(static_cast<unsigned char>(character)) != 0)
-                {
-                    if (token_started)
-                    {
-                        m_storage.push_back(std::move(current));
-                        current.clear();
-                        token_started = false;
-                    }
-                }
-                else
-                {
-                    current.push_back(character);
-                    token_started = true;
-                }
-            }
+				if (character == '"' || character == '\'')
+				{
+					quote = character;
+					token_started = true;
+				}
+				else if (std::isspace(static_cast<unsigned char>(character)) != 0)
+				{
+					if (token_started)
+					{
+						m_storage.push_back(std::move(current));
+						current.clear();
+						token_started = false;
+					}
+				}
+				else
+				{
+					current.push_back(character);
+					token_started = true;
+				}
+			}
 
-            if (quote != '\0')
-            {
-                throw std::invalid_argument(
-                    "SimulatedArgv command line contains an unterminated quote");
-            }
+			if (quote != '\0')
+			{
+				throw std::invalid_argument(
+					"SimulatedArgv command line contains an unterminated quote");
+			}
 
-            if (token_started)
-            {
-                m_storage.push_back(std::move(current));
-            }
+			if (token_started)
+			{
+				m_storage.push_back(std::move(current));
+			}
 
-            RebuildPointers();
-        }
+			RebuildPointers();
+		}
 
-        void RebuildPointers()
-        {
-            m_pointers.clear();
-            m_pointers.reserve(m_storage.size() + 1);
-            for (std::string& argument : m_storage)
-            {
-                m_pointers.push_back(argument.data());
-            }
-            m_pointers.push_back(nullptr);
-        }
+		void RebuildPointers()
+		{
+			m_pointers.clear();
+			m_pointers.reserve(m_storage.size() + 1);
+			for (std::string& argument : m_storage)
+			{
+				m_pointers.push_back(argument.data());
+			}
+			m_pointers.push_back(nullptr);
+		}
 
-        std::vector<std::string> m_storage;
-        std::vector<char*> m_pointers;
-    };
+		std::vector<std::string> m_storage;
+		std::vector<char*> m_pointers;
+	};
 
-    using TestFunction = void (*)();
+	using TestFunction = void (*)();
 
-    struct TestCase
-    {
-        std::string_view name;
-        TestFunction function;
-    };
+	struct TestCase
+	{
+		std::string_view name;
+		TestFunction function;
+	};
 
-    std::vector<TestCase>& Registry()
-    {
-        static std::vector<TestCase> registry;
-        return registry;
-    }
+	std::vector<TestCase>& Registry()
+	{
+		static std::vector<TestCase> registry;
+		return registry;
+	}
 
-    struct Registrar
-    {
-        Registrar(std::string_view name, TestFunction function)
-        {
-            Registry().push_back({ name, function });
-        }
-    };
+	struct Registrar
+	{
+		Registrar(std::string_view name, TestFunction function)
+		{
+			Registry().push_back({ name, function });
+		}
+	};
 
 #define TEST(name)                                                               \
-    static void name();                                                          \
-    static const ::parser_tests::Registrar registrar_##name{ #name, &name };     \
-    static void name()
-
-    using Parser::Error;
-
-    // -----------------------------------------------------------------------------
-    // Direct Parse overloads
-    // -----------------------------------------------------------------------------
-
-    template <typename T>
-    std::string IntegerString(T value)
-    {
-        if constexpr (std::is_signed_v<T>)
-        {
-            return std::to_string(static_cast<long long>(value));
-        }
-        else
-        {
-            return std::to_string(static_cast<unsigned long long>(value));
-        }
-    }
-
-    template <typename T>
-    void CheckSignedIntegerParse()
-    {
-        T value{};
-
-        CHECK(Parser::Parse("0", value));
-        CHECK_EQ(value, static_cast<T>(0));
-
-        CHECK(Parser::Parse("42", value));
-        CHECK_EQ(value, static_cast<T>(42));
-
-        CHECK(Parser::Parse("-17", value));
-        CHECK_EQ(value, static_cast<T>(-17));
-
-        const std::string minimum = IntegerString(std::numeric_limits<T>::min());
-        CHECK(Parser::Parse(minimum, value));
-        CHECK_EQ(value, std::numeric_limits<T>::min());
-
-        const std::string maximum = IntegerString(std::numeric_limits<T>::max());
-        CHECK(Parser::Parse(maximum, value));
-        CHECK_EQ(value, std::numeric_limits<T>::max());
-
-        CHECK_FALSE(Parser::Parse("", value));
-        CHECK_FALSE(Parser::Parse("abc", value));
-        CHECK_FALSE(Parser::Parse("12x", value));
-
-        const std::string above_maximum =
-            std::to_string(static_cast<long long>(std::numeric_limits<T>::max())) +
-            "0";
-        CHECK_FALSE(Parser::Parse(above_maximum, value));
-    }
-
-    template <typename T>
-    void CheckUnsignedIntegerParse()
-    {
-        T value{};
-
-        CHECK(Parser::Parse("0", value));
-        CHECK_EQ(value, static_cast<T>(0));
-
-        CHECK(Parser::Parse("42", value));
-        CHECK_EQ(value, static_cast<T>(42));
-
-        const std::string maximum = IntegerString(std::numeric_limits<T>::max());
-        CHECK(Parser::Parse(maximum, value));
-        CHECK_EQ(value, std::numeric_limits<T>::max());
-
-        CHECK_FALSE(Parser::Parse("-1", value));
-        CHECK_FALSE(Parser::Parse("", value));
-        CHECK_FALSE(Parser::Parse("abc", value));
-        CHECK_FALSE(Parser::Parse("12x", value));
-
-        const std::string above_maximum = maximum + "0";
-        CHECK_FALSE(Parser::Parse(above_maximum, value));
-    }
-
-    TEST(ParseInt64)
-    {
-        CheckSignedIntegerParse<std::int64_t>();
-    }
-
-    TEST(ParseUint64)
-    {
-        CheckUnsignedIntegerParse<std::uint64_t>();
-    }
-
-    TEST(ParseInt32)
-    {
-        CheckSignedIntegerParse<std::int32_t>();
-    }
-
-    TEST(ParseUint32)
-    {
-        CheckUnsignedIntegerParse<std::uint32_t>();
-    }
-
-    TEST(ParseInt16)
-    {
-        CheckSignedIntegerParse<std::int16_t>();
-    }
-
-    TEST(ParseUint16)
-    {
-        CheckUnsignedIntegerParse<std::uint16_t>();
-    }
-
-    TEST(ParseInt8)
-    {
-        CheckSignedIntegerParse<std::int8_t>();
-    }
-
-    TEST(ParseUint8)
-    {
-        CheckUnsignedIntegerParse<std::uint8_t>();
-    }
-
-    template <typename T>
-    void CheckFloatingParse()
-    {
-        T value{};
-
-        CHECK(Parser::Parse("0", value));
-        CHECK_NEAR(value, static_cast<T>(0), static_cast<T>(0));
-
-        CHECK(Parser::Parse("1.5", value));
-        CHECK_NEAR(value, static_cast<T>(1.5), static_cast<T>(0.00001));
-
-        CHECK(Parser::Parse("-2.25", value));
-        CHECK_NEAR(value, static_cast<T>(-2.25), static_cast<T>(0.00001));
-
-        CHECK(Parser::Parse("1e3", value));
-        CHECK_NEAR(value, static_cast<T>(1000), static_cast<T>(0.001));
-
-        CHECK_FALSE(Parser::Parse("", value));
-        CHECK_FALSE(Parser::Parse("abc", value));
-        CHECK_FALSE(Parser::Parse("1.2x", value));
-    }
-
-    TEST(ParseFloat)
-    {
-        CheckFloatingParse<float>();
-    }
-
-    TEST(ParseDouble)
-    {
-        CheckFloatingParse<double>();
-    }
-
-    TEST(ParseLongDouble)
-    {
-        CheckFloatingParse<long double>();
-    }
-
-    TEST(ParseString)
-    {
-        std::string value = "old";
-
-        CHECK(Parser::Parse("hello world", value));
-        CHECK_EQ(value, std::string("hello world"));
-
-        CHECK(Parser::Parse("", value));
-        CHECK_EQ(value, std::string());
-    }
-
-    // -----------------------------------------------------------------------------
-    // Scalar named arguments
-    // -----------------------------------------------------------------------------
-
-    TEST(NamedArgumentSeparateTokensSucceed)
-    {
-        SimulatedArgv args{ "--count", "17" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& count = parser.Add<std::int64_t>("--count");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(count.Provided());
-        CHECK_EQ(count.Value(), std::int64_t{ 17 });
-    }
-
-    TEST(NamedArgumentEqualsSyntaxIsUnknownValue)
-    {
-        // No whitespace means this remains one token; equals syntax is unsupported.
-        SimulatedArgv args{ "--count=17" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::int64_t>("--count");
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    TEST(NamedArgumentCommandLineStringIsSplitOnWhitespace)
-    {
-        SimulatedArgv args{ "--count 17" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& count = parser.Add<std::int64_t>("--count");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(count.Provided());
-        CHECK_EQ(count.Value(), std::int64_t{ 17 });
-    }
-
-    TEST(NamedArgumentAliasSeparateTokensSucceed)
-    {
-        SimulatedArgv args{ "-c", "21" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& count = parser.Add<std::int64_t>("--count", { "-c", "--iterations" });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(count.Provided());
-        CHECK_EQ(count.Value(), std::int64_t{ 21 });
-    }
-
-    TEST(NamedArgumentAliasEqualsSyntaxIsUnknownValue)
-    {
-        SimulatedArgv args{ "-c=21" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::int64_t>("--count", { "-c" });
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    TEST(NamedStringEqualsSyntaxIsUnknownValue)
-    {
-        SimulatedArgv args{ "--name=" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::string>("--name");
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    TEST(OptionalArgumentWithoutDefaultIsNotProvided)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& value = parser.Add<std::int64_t>("--value");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_FALSE(value.Provided());
-    }
-
-    TEST(DefaultIsUsedAndDoesNotCountAsProvided)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& output = parser.Add<std::string>("--output").Default("fallback.txt");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_FALSE(output.Provided());
-        CHECK_EQ(output.Value(), std::string("fallback.txt"));
-    }
-
-    TEST(ExplicitValueOverridesDefault)
-    {
-        SimulatedArgv args{ "--output", "chosen.txt" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& output = parser.Add<std::string>("--output").Default("fallback.txt");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(output.Provided());
-        CHECK_EQ(output.Value(), std::string("chosen.txt"));
-    }
-
-    TEST(RequiredArgumentPresent)
-    {
-        SimulatedArgv args{ "--path", "input.txt" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& path = parser.Add<std::string>("--path").Required();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(path.Provided());
-        CHECK_EQ(path.Value(), std::string("input.txt"));
-    }
-
-    TEST(RequiredArgumentMissing)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::string>("--path").Required();
-
-        CHECK_ERROR(parser, Error::MISSING_REQUIRED);
-    }
-
-    TEST(MissingNamedArgumentValue)
-    {
-        SimulatedArgv args{ "--count" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::int64_t>("--count");
-
-        CHECK_ERROR(parser, Error::MISSING_VALUE);
-    }
-
-    TEST(NumericParseFailure)
-    {
-        SimulatedArgv args{ "--count", "not-a-number" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::int64_t>("--count");
-
-        CHECK_ERROR(parser, Error::PARSE_FAIL);
-    }
-
-    TEST(EmptyNumericEqualsSyntaxIsUnknownValue)
-    {
-        SimulatedArgv args{ "--count=" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::int64_t>("--count");
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    TEST(NegativeNamedNumericValueIsNotMistakenForOption)
-    {
-        SimulatedArgv args{ "--offset", "-42" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& offset = parser.Add<std::int64_t>("--offset");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(offset.Provided());
-        CHECK_EQ(offset.Value(), std::int64_t{ -42 });
-    }
-
-    TEST(UnknownNamedArgument)
-    {
-        SimulatedArgv args{ "--does-not-exist" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    TEST(ExtraBareTokenIsUnknown)
-    {
-        SimulatedArgv args{ "unclaimed" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    TEST(DoubleDashSeparatorIsNotImplemented)
-    {
-        SimulatedArgv args{ "--" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    TEST(HelpMetadataDoesNotAffectSuccessfulParsing)
-    {
-        SimulatedArgv args{ "--path", "input.txt" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Help("Program-level help.");
-        auto& path = parser.Add<std::string>("--path")
-            .Help("Input path.")
-            .Required();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(path.Value(), std::string("input.txt"));
-    }
-
-    // -----------------------------------------------------------------------------
-    // Text validation, transformation, and value validation
-    // -----------------------------------------------------------------------------
-
-    TEST(TextValidationAcceptsValue)
-    {
-        SimulatedArgv args{ "--name", "letters-only" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& name = parser.Add<std::string>("--name").ValidateText(
-            [](std::string_view text)
-            {
-                return std::all_of(
-                    text.begin(), text.end(), [](unsigned char c)
-                    {
-                        return c == '-' || std::isalpha(c) != 0;
-                    });
-            });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(name.Value(), std::string("letters-only"));
-    }
-
-    TEST(TextValidationRejectsValue)
-    {
-        SimulatedArgv args{ "--name", "abc123" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::string>("--name").ValidateText(
-            [](std::string_view text)
-            {
-                return std::none_of(
-                    text.begin(), text.end(), [](unsigned char c)
-                    {
-                        return std::isdigit(c) != 0;
-                    });
-            });
-
-        CHECK_ERROR(parser, Error::TEXT_VALIDATION_INVALID);
-    }
-
-    TEST(TransformationChangesStoredString)
-    {
-        SimulatedArgv args{ "--name", "MiXeD" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& name = parser.Add<std::string>("--name").Transform(
-            [](std::string& text)
-            {
-                std::transform(
-                    text.begin(), text.end(), text.begin(), [](unsigned char c)
-                    {
-                        return static_cast<char>(std::tolower(c));
-                    });
-                return true;
-            });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(name.Value(), std::string("mixed"));
-    }
-
-    TEST(TransformationRunsBeforeNumericParsing)
-    {
-        SimulatedArgv args{ "--amount", "1,234" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& amount = parser.Add<std::int64_t>("--amount").Transform(
-            [](std::string& text)
-            {
-                std::erase(text, ',');
-                return true;
-            });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(amount.Value(), std::int64_t{ 1234 });
-    }
-
-    TEST(TransformationFailure)
-    {
-        SimulatedArgv args{ "--name", "anything" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::string>("--name").Transform(
-            [](std::string&)
-            {
-                return false;
-            });
-
-        CHECK_ERROR(parser, Error::TRANSFORMATION_ERROR);
-    }
-
-    TEST(ValueValidationAcceptsParsedValue)
-    {
-        SimulatedArgv args{ "--scale", "2.5" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& scale = parser.Add<double>("--scale").ValidateValue(
-            [](const double& value)
-            {
-                return value > 0.0;
-            });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_NEAR(scale.Value(), 2.5, 0.000001);
-    }
-
-    TEST(ValueValidationRejectsParsedValue)
-    {
-        SimulatedArgv args{ "--scale", "-0.5" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<double>("--scale").ValidateValue(
-            [](const double& value)
-            {
-                return value > 0.0;
-            });
-
-        CHECK_ERROR(parser, Error::VAL_VALIDATION_INVALID);
-    }
-
-    TEST(MultipleTransformationsRunInRegistrationOrder)
-    {
-        SimulatedArgv args{ "--name", "AbC" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& name = parser.Add<std::string>("--name")
-            .Transform(
-                [](std::string& value)
-                {
-                    value += "-SUFFIX";
-                    return true;
-                })
-            .Transform(
-                [](std::string& value)
-                {
-                    std::transform(
-                        value.begin(),
-                        value.end(),
-                        value.begin(),
-                        [](unsigned char c)
-                        {
-                            return static_cast<char>(std::tolower(c));
-                        });
-                    return true;
-                });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(name.Value(), std::string("abc-suffix"));
-    }
-
-    // -----------------------------------------------------------------------------
-    // Flags
-    // -----------------------------------------------------------------------------
-
-    TEST(FlagDefaultsFalse)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& debug = parser.AddFlag("--debug");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_FALSE(debug.Value());
-    }
-
-    TEST(FlagCanonicalNameSetsTrue)
-    {
-        SimulatedArgv args{ "--debug" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& debug = parser.AddFlag("--debug");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(debug.Value());
-    }
-
-    TEST(FlagAliasSetsTrue)
-    {
-        SimulatedArgv args{ "-d" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& debug = parser.AddFlag("--debug", { "-d" }).Help("Debug output.");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(debug.Value());
-    }
-
-    TEST(MultipleFlagsAreIndependent)
-    {
-        SimulatedArgv args{ "--debug", "-v" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& debug = parser.AddFlag("--debug", { "-d" });
-        auto& verbose = parser.AddFlag("--verbose", { "-v" });
-        auto& quiet = parser.AddFlag("--quiet", { "-q" });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(debug.Value());
-        CHECK(verbose.Value());
-        CHECK_FALSE(quiet.Value());
-    }
-
-    template <typename P>
-    concept SupportsAddBool = requires(P & parser)
-    {
-        parser.template Add<bool>("--bad-bool");
-    };
-
-    template <typename P>
-    void CheckAddBoolProducesFlagAsArg(P& parser)
-    {
-        if constexpr (SupportsAddBool<P>)
-        {
-            parser.template Add<bool>("--bad-bool");
-            CHECK_ERROR(parser, Error::FLAG_AS_ARG);
-        }
-        else
-        {
-            throw TestSkipped(
-                "Add<bool> is rejected at compile time by this header; "
-                "FLAG_AS_ARG cannot be reached through the visible API");
-        }
-    }
-
-    TEST(AddBoolReportsFlagAsArgWhenSupported)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        CheckAddBoolProducesFlagAsArg(parser);
-    }
-
-    // -----------------------------------------------------------------------------
-    // Positional arguments
-    // -----------------------------------------------------------------------------
-
-    TEST(RequiredPositionalArgument)
-    {
-        SimulatedArgv args{ "hello" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& text = parser.AddPositional<std::string>("text").Required();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(text.Provided());
-        CHECK_EQ(text.Value(), std::string("hello"));
-    }
-
-    TEST(MissingRequiredPositionalArgument)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddPositional<std::string>("text").Required();
-
-        CHECK_ERROR(parser, Error::MISSING_REQUIRED);
-    }
-
-    TEST(OptionalPositionalUsesDefault)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& number = parser.AddPositional<std::int64_t>("number").Default(66);
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_FALSE(number.Provided());
-        CHECK_EQ(number.Value(), std::int64_t{ 66 });
-    }
-
-    TEST(MultiplePositionalsAreAssignedInRegistrationOrder)
-    {
-        SimulatedArgv args{ "first", "42" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& first = parser.AddPositional<std::string>("first").Required();
-        auto& second = parser.AddPositional<std::int64_t>("second").Required();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(first.Value(), std::string("first"));
-        CHECK_EQ(second.Value(), std::int64_t{ 42 });
-    }
-
-    TEST(NamedAndPositionalArgumentsMayBeInterleaved)
-    {
-        SimulatedArgv args{ "input.txt", "--count", "3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& input = parser.AddPositional<std::string>("input").Required();
-        auto& count = parser.Add<std::int64_t>("--count").Required();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(input.Value(), std::string("input.txt"));
-        CHECK_EQ(count.Value(), std::int64_t{ 3 });
-    }
-
-    TEST(NamedArgumentMayAppearBeforePositional)
-    {
-        SimulatedArgv args{ "--count", "3", "input.txt" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& input = parser.AddPositional<std::string>("input").Required();
-        auto& count = parser.Add<std::int64_t>("--count").Required();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(input.Value(), std::string("input.txt"));
-        CHECK_EQ(count.Value(), std::int64_t{ 3 });
-    }
-
-    TEST(NegativePositionalNumericValue)
-    {
-        SimulatedArgv args{ "-12" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& value = parser.AddPositional<std::int64_t>("value").Required();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(value.Value(), std::int64_t{ -12 });
-    }
-
-    TEST(PositionalTransformationAndValidation)
-    {
-        SimulatedArgv args{ "HELLO" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& text = parser.AddPositional<std::string>("text")
-            .Required()
-            .ValidateText(
-                [](std::string_view value)
-                {
-                    return std::all_of(
-                        value.begin(), value.end(), [](unsigned char c)
-                        {
-                            return std::isalpha(c) != 0;
-                        });
-                })
-            .Transform(
-                [](std::string& value)
-                {
-                    std::transform(
-                        value.begin(),
-                        value.end(),
-                        value.begin(),
-                        [](unsigned char c)
-                        {
-                            return static_cast<char>(std::tolower(c));
-                        });
-                    return true;
-                });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(text.Value(), std::string("hello"));
-    }
-
-    TEST(ExtraPositionalTokenIsUnknown)
-    {
-        SimulatedArgv args{ "first", "extra" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddPositional<std::string>("first").Required();
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    // -----------------------------------------------------------------------------
-    // Aggregates
-    // -----------------------------------------------------------------------------
-
-    TEST(AggregateExactCount)
-    {
-        SimulatedArgv args{ "--items", "1", "2", "3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(items.Provided());
-        CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
-    }
-
-    TEST(AggregateAlias)
-    {
-        SimulatedArgv args{ "-i", "4", "5" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items =
-            parser.AddAggregate<std::int64_t>("--items", { "-i" }).Count(2);
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(items.Provided());
-        CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 4, 5 }));
-    }
-
-    TEST(AggregateEqualsSyntaxIsUnknownValue)
-    {
-        SimulatedArgv args{ "--items=1", "2", "3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").Count(3);
-
-        CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
-    }
-
-    TEST(AggregateStopsAtNextRecognizedOption)
-    {
-        SimulatedArgv args{
-            "--items", "1", "2", "3", "--scale", "2.5", "--debug"
-        };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
-        auto& scale = parser.Add<double>("--scale").Required();
-        auto& debug = parser.AddFlag("--debug");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
-        CHECK_NEAR(scale.Value(), 2.5, 0.000001);
-        CHECK(debug.Value());
-    }
-
-    TEST(AggregateAcceptsNegativeNumbers)
-    {
-        SimulatedArgv args{ "--items", "-1", "-2", "-3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(items.Value(), std::vector<std::int64_t>({ -1, -2, -3 }));
-    }
-
-    TEST(AggregateMinAndMaxCount)
-    {
-        SimulatedArgv args{ "--items", "1", "2", "3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items")
-            .MinCount(2)
-            .MaxCount(4);
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
-    }
-
-    TEST(AggregateMinAndUnlimited)
-    {
-        SimulatedArgv args{ "--items", "1", "2", "3", "4", "5", "6" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items")
-            .MinCount(2)
-            .Unlimited();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(
-            items.Value(),
-            std::vector<std::int64_t>({ 1, 2, 3, 4, 5, 6 }));
-    }
-
-    TEST(OptionalAggregateWithoutValueIsNotProvided)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items").Count(2);
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_FALSE(items.Provided());
-    }
-
-    TEST(AggregateDefaultIsUsedAndNotProvided)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items")
-            .Count(2)
-            .Default({ 7, 8 });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_FALSE(items.Provided());
-        CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 7, 8 }));
-    }
-
-    TEST(ExplicitAggregateOverridesDefault)
-    {
-        SimulatedArgv args{ "--items", "1", "2" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items")
-            .Count(2)
-            .Default({ 7, 8 });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(items.Provided());
-        CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2 }));
-    }
-
-    TEST(RequiredAggregatePresent)
-    {
-        SimulatedArgv args{ "--items", "1", "2" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items")
-            .Required()
-            .Count(2);
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK(items.Provided());
-    }
-
-    TEST(RequiredAggregateMissing)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").Required().Count(2);
-
-        CHECK_ERROR(parser, Error::MISSING_REQUIRED);
-    }
-
-    TEST(AggregateTooFewValues)
-    {
-        SimulatedArgv args{ "--items", "1", "2" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").Count(3);
-
-        CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
-    }
-
-    TEST(AggregateTooManyValues)
-    {
-        SimulatedArgv args{ "--items", "1", "2", "3", "4" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").MaxCount(3).MinCount(1);
-
-        CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
-    }
-
-    TEST(AggregateBelowMinimum)
-    {
-        SimulatedArgv args{ "--items", "1" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").MinCount(2).Unlimited();
-
-        CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
-    }
-
-    TEST(AggregateElementParseFailure)
-    {
-        SimulatedArgv args{ "--items", "1", "bad", "3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").Count(3);
-
-        CHECK_ERROR(parser, Error::PARSE_FAIL);
-    }
-
-    TEST(AggregateTextValidationFailure)
-    {
-        SimulatedArgv args{ "--items", "good", "bad2" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::string>("--items")
-            .Count(2)
-            .ValidateText(
-                [](std::string_view value)
-                {
-                    return std::none_of(
-                        value.begin(), value.end(), [](unsigned char c)
-                        {
-                            return std::isdigit(c) != 0;
-                        });
-                });
-
-        CHECK_ERROR(parser, Error::TEXT_VALIDATION_INVALID);
-    }
-
-    TEST(AggregateValueValidationFailure)
-    {
-        SimulatedArgv args{ "--items", "1", "-2", "3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items")
-            .Count(3)
-            .ValidateValue(
-                [](const std::int64_t& value)
-                {
-                    return value > 0;
-                });
-
-        CHECK_ERROR(parser, Error::VAL_VALIDATION_INVALID);
-    }
-
-    TEST(AggregateTransformationAppliesToEachElement)
-    {
-        SimulatedArgv args{ "--items", "ONE", "TWO" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::string>("--items")
-            .Count(2)
-            .Transform(
-                [](std::string& value)
-                {
-                    std::transform(
-                        value.begin(),
-                        value.end(),
-                        value.begin(),
-                        [](unsigned char c)
-                        {
-                            return static_cast<char>(std::tolower(c));
-                        });
-                    return true;
-                });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(items.Value(), std::vector<std::string>({ "one", "two" }));
-    }
-
-    TEST(AggregateTransformationFailure)
-    {
-        SimulatedArgv args{ "--items", "good", "reject" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::string>("--items")
-            .Count(2)
-            .Transform(
-                [](std::string& value)
-                {
-                    return value != "reject";
-                });
-
-        CHECK_ERROR(parser, Error::TRANSFORMATION_ERROR);
-    }
-
-    TEST(AggregateCollectionValidationAcceptsCollection)
-    {
-        SimulatedArgv args{ "--items", "1", "2", "3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items")
-            .Count(3)
-            .ValidateCollection(
-                [](const std::vector<std::int64_t>& values)
-                {
-                    return values ==
-                        std::vector<std::int64_t>({ 1, 2, 3 });
-                });
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(items.Value().size(), std::size_t{ 3 });
-    }
-
-    TEST(AggregateCollectionValidationRejectsCollection)
-    {
-        SimulatedArgv args{ "--items", "1", "2", "3" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items")
-            .Count(3)
-            .ValidateCollection(
-                [](const std::vector<std::int64_t>& values)
-                {
-                    const auto sum = values[0] + values[1] + values[2];
-                    return sum < 5;
-                });
-
-        CHECK_ERROR(parser, Error::COL_VALIDATION_INVALID);
-    }
-
-    TEST(AggregateHelpMetadataDoesNotAffectParsing)
-    {
-        SimulatedArgv args{ "--items", "1", "2" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        auto& items = parser.AddAggregate<std::int64_t>("--items")
-            .Count(2)
-            .Help("Two integers.");
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-        CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2 }));
-    }
-
-    // -----------------------------------------------------------------------------
-    // Help query handling
-    // -----------------------------------------------------------------------------
-
-    TEST(LongHelpReturnsHelpQuery)
-    {
-        SimulatedArgv args{ "--help" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Help("Application help.");
-
-        CHECK_ERROR(parser, Error::HELP_QUERY);
-    }
-
-    TEST(ShortHelpReturnsHelpQuery)
-    {
-        SimulatedArgv args{ "-h" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Help("Application help.");
-
-        CHECK_ERROR(parser, Error::HELP_QUERY);
-    }
-
-    TEST(HelpQueryTakesPriorityOverMissingRequiredArguments)
-    {
-        SimulatedArgv args{ "--help" };
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::string>("--required").Required();
-
-        CHECK_ERROR(parser, Error::HELP_QUERY);
-    }
-
-    // -----------------------------------------------------------------------------
-    // Invalid parser configurations, reported by ValidateArgs(false)
-    // -----------------------------------------------------------------------------
-
-    TEST(RequiredScalarCannotHaveDefault)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::int64_t>("--count").Required().Default(5);
-
-        CHECK_ERROR(parser, Error::REQUIRED_HAS_DEFAULT);
-    }
-
-    TEST(RequiredAggregateCannotHaveDefault)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items")
-            .Count(2)
-            .Required()
-            .Default({ 1, 2 });
-
-        CHECK_ERROR(parser, Error::REQUIRED_HAS_DEFAULT);
-    }
-
-    TEST(ScalarDefaultCannotBeSetTwice)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::int64_t>("--count").Default(1).Default(2);
-
-        CHECK_ERROR(parser, Error::DEFAULT_ALREADY_SET);
-    }
-
-    TEST(AggregateDefaultCannotBeSetTwice)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items")
-            .Count(2)
-            .Default({ 1, 2 })
-            .Default({ 3, 4 });
-
-        CHECK_ERROR(parser, Error::DEFAULT_ALREADY_SET);
-    }
-
-    TEST(RequiredPositionalCannotFollowOptionalPositional)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddPositional<std::string>("optional").Default("default");
-        parser.AddPositional<std::string>("required").Required();
-
-        CHECK_ERROR(parser, Error::REQ_POS_AFTER_OPTIONAL);
-    }
-
-    TEST(DuplicateCanonicalName)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::string>("--name");
-        parser.Add<std::int64_t>("--name");
-
-        CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
-    }
-
-    TEST(AliasCollidesWithCanonicalName)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::string>("--first", { "-f" });
-        parser.Add<std::string>("-f");
-
-        CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
-    }
-
-    TEST(AliasCollidesWithAnotherAlias)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.Add<std::string>("--first", { "-x" });
-        parser.Add<std::string>("--second", { "-x" });
-
-        CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
-    }
-
-    TEST(FlagNameCollidesWithArgumentName)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddFlag("--debug");
-        parser.Add<std::string>("--debug");
-
-        CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
-    }
-
-    TEST(AggregateMustDeclareCardinality)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items");
-
-        CHECK_ERROR(parser, Error::NO_CARDINALITY_SET);
-    }
-
-    TEST(MinimumWithoutMaximumOrUnlimited)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").MinCount(2);
-
-        CHECK_ERROR(parser, Error::MAX_COUNT_NOT_SET);
-    }
-
-    TEST(MaximumWithoutMinimum)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").MaxCount(5);
-
-        CHECK_ERROR(parser, Error::MIN_COUNT_NOT_SET);
-    }
-
-    TEST(ExactCountClashesWithMinimum)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").Count(3).MinCount(1);
-
-        CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
-    }
-
-    TEST(ExactCountClashesWithMaximum)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").Count(3).MaxCount(5);
-
-        CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
-    }
-
-    TEST(MaximumClashesWithUnlimited)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items")
-            .MinCount(1)
-            .MaxCount(5)
-            .Unlimited();
-
-        CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
-    }
-
-    TEST(MinimumGreaterThanMaximumIsCardinalityError)
-    {
-        SimulatedArgv args{};
-        Parser::ArgParser parser(args.argc(), args.argv());
-        parser.AddAggregate<std::int64_t>("--items").MinCount(5).MaxCount(2);
-
-        CHECK_ERROR(parser, Error::MIN_GREATER_MAX);
-    }
-
-    // -----------------------------------------------------------------------------
-    // Full example-style integration test
-    // -----------------------------------------------------------------------------
-
-    TEST(FullExampleStyleCommandLine)
-    {
-        SimulatedArgv args{
-            "--path", "SomeFile.TXT",
-            "--output", "RESULT.TXT",
-            "--count", "7",
-            "--scale", "2.5",
-            "-d",
-            "HELLO",
-            "-12",
-            "--floats", "1.5", "2.0", "3.25", "4.0"
-        };
-
-        Parser::ArgParser parser(args.argc(), args.argv());
-
-        auto lowercase = [](std::string& value)
-            {
-                std::transform(
-                    value.begin(), value.end(), value.begin(), [](unsigned char c)
-                    {
-                        return static_cast<char>(std::tolower(c));
-                    });
-                return true;
-            };
-
-        auto no_numbers = [](std::string_view value)
-            {
-                return std::none_of(
-                    value.begin(), value.end(), [](unsigned char c)
-                    {
-                        return std::isdigit(c) != 0;
-                    });
-            };
-
-        auto non_negative_text = [](std::string_view value)
-            {
-                return value.empty() || value.front() != '-';
-            };
-
-        auto positive_double = [](const double& value)
-            {
-                return value > 0.0;
-            };
-
-        auto& path = parser.Add<std::string>("--path", { "-p", "--filepath" })
-            .Required()
-            .ValidateText(no_numbers)
-            .Transform(lowercase)
-            .Help("Path to the input file.");
-
-        auto& output = parser.Add<std::string>("--output", { "-o" })
-            .Default("output.txt")
-            .Transform(lowercase);
-
-        auto& count = parser.Add<std::int64_t>("--count", { "-c" })
-            .Default(5)
-            .ValidateText(non_negative_text);
-
-        auto& scale = parser.Add<double>("--scale", { "-s" })
-            .Default(1.0)
-            .ValidateValue(positive_double);
-
-        auto& debug = parser.AddFlag("--debug", { "-d" });
-        auto& verbose = parser.AddFlag("--verbose", { "-v" });
-
-        auto& positional_text = parser.AddPositional<std::string>("text")
-            .Required()
-            .Transform(lowercase)
-            .ValidateText(no_numbers);
-
-        auto& positional_num = parser.AddPositional<std::int64_t>("num")
-            .Default(66);
-
-        auto& floats = parser.AddAggregate<double>("--floats")
-            .ValidateValue(positive_double)
-            .Required()
-            .MinCount(3)
-            .Unlimited();
-
-        CHECK_ERROR(parser, Error::SUCCESS);
-
-        CHECK_EQ(path.Value(), std::string("somefile.txt"));
-        CHECK(path.Provided());
-
-        CHECK_EQ(output.Value(), std::string("result.txt"));
-        CHECK(output.Provided());
-
-        CHECK_EQ(count.Value(), std::int64_t{ 7 });
-        CHECK(count.Provided());
-
-        CHECK_NEAR(scale.Value(), 2.5, 0.000001);
-        CHECK(scale.Provided());
-
-        CHECK(debug.Value());
-        CHECK_FALSE(verbose.Value());
-
-        CHECK_EQ(positional_text.Value(), std::string("hello"));
-        CHECK(positional_text.Provided());
-
-        CHECK_EQ(positional_num.Value(), std::int64_t{ -12 });
-        CHECK(positional_num.Provided());
-
-        CHECK(floats.Provided());
-        CHECK_EQ(floats.Value().size(), std::size_t{ 4 });
-        CHECK_NEAR(floats.Value()[0], 1.5, 0.000001);
-        CHECK_NEAR(floats.Value()[1], 2.0, 0.000001);
-        CHECK_NEAR(floats.Value()[2], 3.25, 0.000001);
-        CHECK_NEAR(floats.Value()[3], 4.0, 0.000001);
-    }
-
-    TEST(LegacyTooFewArgsIsDocumentedAsUnreachable)
-    {
-        throw TestSkipped(
-            "Error::TOO_FEW_ARGS is legacy and has no documented trigger through "
-            "the current public API");
-    }
+	static void name();                                                          \
+	static const ::parser_tests::Registrar registrar_##name{ #name, &name };     \
+	static void name()
+
+	using Parser::Error;
+
+	// -----------------------------------------------------------------------------
+	// Direct Parse overloads
+	// -----------------------------------------------------------------------------
+
+	template <typename T>
+	std::string IntegerString(T value)
+	{
+		if constexpr (std::is_signed_v<T>)
+		{
+			return std::to_string(static_cast<long long>(value));
+		}
+		else
+		{
+			return std::to_string(static_cast<unsigned long long>(value));
+		}
+	}
+
+	template <typename T>
+	void CheckSignedIntegerParse()
+	{
+		T value{};
+
+		CHECK(Parser::Parse("0", value));
+		CHECK_EQ(value, static_cast<T>(0));
+
+		CHECK(Parser::Parse("42", value));
+		CHECK_EQ(value, static_cast<T>(42));
+
+		CHECK(Parser::Parse("-17", value));
+		CHECK_EQ(value, static_cast<T>(-17));
+
+		const std::string minimum = IntegerString(std::numeric_limits<T>::min());
+		CHECK(Parser::Parse(minimum, value));
+		CHECK_EQ(value, std::numeric_limits<T>::min());
+
+		const std::string maximum = IntegerString(std::numeric_limits<T>::max());
+		CHECK(Parser::Parse(maximum, value));
+		CHECK_EQ(value, std::numeric_limits<T>::max());
+
+		CHECK_FALSE(Parser::Parse("", value));
+		CHECK_FALSE(Parser::Parse("abc", value));
+		CHECK_FALSE(Parser::Parse("12x", value));
+
+		const std::string above_maximum =
+			std::to_string(static_cast<long long>(std::numeric_limits<T>::max())) +
+			"0";
+		CHECK_FALSE(Parser::Parse(above_maximum, value));
+	}
+
+	template <typename T>
+	void CheckUnsignedIntegerParse()
+	{
+		T value{};
+
+		CHECK(Parser::Parse("0", value));
+		CHECK_EQ(value, static_cast<T>(0));
+
+		CHECK(Parser::Parse("42", value));
+		CHECK_EQ(value, static_cast<T>(42));
+
+		const std::string maximum = IntegerString(std::numeric_limits<T>::max());
+		CHECK(Parser::Parse(maximum, value));
+		CHECK_EQ(value, std::numeric_limits<T>::max());
+
+		CHECK_FALSE(Parser::Parse("-1", value));
+		CHECK_FALSE(Parser::Parse("", value));
+		CHECK_FALSE(Parser::Parse("abc", value));
+		CHECK_FALSE(Parser::Parse("12x", value));
+
+		const std::string above_maximum = maximum + "0";
+		CHECK_FALSE(Parser::Parse(above_maximum, value));
+	}
+
+	TEST(ParseInt64)
+	{
+		CheckSignedIntegerParse<std::int64_t>();
+	}
+
+	TEST(ParseUint64)
+	{
+		CheckUnsignedIntegerParse<std::uint64_t>();
+	}
+
+	TEST(ParseInt32)
+	{
+		CheckSignedIntegerParse<std::int32_t>();
+	}
+
+	TEST(ParseUint32)
+	{
+		CheckUnsignedIntegerParse<std::uint32_t>();
+	}
+
+	TEST(ParseInt16)
+	{
+		CheckSignedIntegerParse<std::int16_t>();
+	}
+
+	TEST(ParseUint16)
+	{
+		CheckUnsignedIntegerParse<std::uint16_t>();
+	}
+
+	TEST(ParseInt8)
+	{
+		CheckSignedIntegerParse<std::int8_t>();
+	}
+
+	TEST(ParseUint8)
+	{
+		CheckUnsignedIntegerParse<std::uint8_t>();
+	}
+
+	template <typename T>
+	void CheckFloatingParse()
+	{
+		T value{};
+
+		CHECK(Parser::Parse("0", value));
+		CHECK_NEAR(value, static_cast<T>(0), static_cast<T>(0));
+
+		CHECK(Parser::Parse("1.5", value));
+		CHECK_NEAR(value, static_cast<T>(1.5), static_cast<T>(0.00001));
+
+		CHECK(Parser::Parse("-2.25", value));
+		CHECK_NEAR(value, static_cast<T>(-2.25), static_cast<T>(0.00001));
+
+		CHECK(Parser::Parse("1e3", value));
+		CHECK_NEAR(value, static_cast<T>(1000), static_cast<T>(0.001));
+
+		CHECK_FALSE(Parser::Parse("", value));
+		CHECK_FALSE(Parser::Parse("abc", value));
+		CHECK_FALSE(Parser::Parse("1.2x", value));
+	}
+
+	TEST(ParseFloat)
+	{
+		CheckFloatingParse<float>();
+	}
+
+	TEST(ParseDouble)
+	{
+		CheckFloatingParse<double>();
+	}
+
+	TEST(ParseLongDouble)
+	{
+		CheckFloatingParse<long double>();
+	}
+
+	TEST(ParseString)
+	{
+		std::string value = "old";
+
+		CHECK(Parser::Parse("hello world", value));
+		CHECK_EQ(value, std::string("hello world"));
+
+		CHECK(Parser::Parse("", value));
+		CHECK_EQ(value, std::string());
+	}
+
+	// -----------------------------------------------------------------------------
+	// Scalar named arguments
+	// -----------------------------------------------------------------------------
+
+	TEST(NamedArgumentSeparateTokensSucceed)
+	{
+		SimulatedArgv args{ "--count", "17" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& count = parser.Add<std::int64_t>("--count");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(count.Provided());
+		CHECK_EQ(count.Value(), std::int64_t{ 17 });
+	}
+
+	TEST(NamedArgumentEqualsSyntaxIsUnknownValue)
+	{
+		// No whitespace means this remains one token; equals syntax is unsupported.
+		SimulatedArgv args{ "--count=17" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count");
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(NamedArgumentCommandLineStringIsSplitOnWhitespace)
+	{
+		SimulatedArgv args{ "--count 17" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& count = parser.Add<std::int64_t>("--count");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(count.Provided());
+		CHECK_EQ(count.Value(), std::int64_t{ 17 });
+	}
+
+	TEST(NamedArgumentAliasSeparateTokensSucceed)
+	{
+		SimulatedArgv args{ "-c", "21" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& count = parser.Add<std::int64_t>("--count", { "-c", "--iterations" });
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(count.Provided());
+		CHECK_EQ(count.Value(), std::int64_t{ 21 });
+	}
+
+	TEST(NamedArgumentAliasEqualsSyntaxIsUnknownValue)
+	{
+		SimulatedArgv args{ "-c=21" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count", { "-c" });
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(NamedStringEqualsSyntaxIsUnknownValue)
+	{
+		SimulatedArgv args{ "--name=" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--name");
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(OptionalArgumentWithoutDefaultIsNotProvided)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.Add<std::int64_t>("--value");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(value.Provided());
+	}
+
+	TEST(DefaultIsUsedAndDoesNotCountAsProvided)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& output = parser.Add<std::string>("--output").Default("fallback.txt");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(output.Provided());
+		CHECK_EQ(output.Value(), std::string("fallback.txt"));
+	}
+
+	TEST(ExplicitValueOverridesDefault)
+	{
+		SimulatedArgv args{ "--output", "chosen.txt" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& output = parser.Add<std::string>("--output").Default("fallback.txt");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(output.Provided());
+		CHECK_EQ(output.Value(), std::string("chosen.txt"));
+	}
+
+	TEST(RequiredArgumentPresent)
+	{
+		SimulatedArgv args{ "--path", "input.txt" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& path = parser.Add<std::string>("--path").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(path.Provided());
+		CHECK_EQ(path.Value(), std::string("input.txt"));
+	}
+
+	TEST(RequiredArgumentMissing)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--path").Required();
+
+		CHECK_ERROR(parser, Error::MISSING_REQUIRED);
+	}
+
+	TEST(MissingNamedArgumentValue)
+	{
+		SimulatedArgv args{ "--count" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count");
+
+		CHECK_ERROR(parser, Error::MISSING_VALUE);
+	}
+
+	TEST(NumericParseFailure)
+	{
+		SimulatedArgv args{ "--count", "not-a-number" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count");
+
+		CHECK_ERROR(parser, Error::PARSE_FAIL);
+	}
+
+	TEST(EmptyNumericEqualsSyntaxIsUnknownValue)
+	{
+		SimulatedArgv args{ "--count=" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count");
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(NegativeNamedNumericValueIsNotMistakenForOption)
+	{
+		SimulatedArgv args{ "--offset", "-42" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& offset = parser.Add<std::int64_t>("--offset");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(offset.Provided());
+		CHECK_EQ(offset.Value(), std::int64_t{ -42 });
+	}
+
+	TEST(UnknownNamedArgument)
+	{
+		SimulatedArgv args{ "--does-not-exist" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(ExtraBareTokenIsUnknown)
+	{
+		SimulatedArgv args{ "unclaimed" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(DoubleDashSeparatorIsNotImplemented)
+	{
+		SimulatedArgv args{ "--" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(HelpMetadataDoesNotAffectSuccessfulParsing)
+	{
+		SimulatedArgv args{ "--path", "input.txt" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Help("Program-level help.");
+		auto& path = parser.Add<std::string>("--path")
+			.Help("Input path.")
+			.Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(path.Value(), std::string("input.txt"));
+	}
+
+	// -----------------------------------------------------------------------------
+	// Text validation, transformation, and value validation
+	// -----------------------------------------------------------------------------
+
+	TEST(TextValidationAcceptsValue)
+	{
+		SimulatedArgv args{ "--name", "letters-only" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& name = parser.Add<std::string>("--name").ValidateText(
+			[](std::string_view text)
+			{
+				return std::all_of(
+					text.begin(), text.end(), [](unsigned char c)
+					{
+						return c == '-' || std::isalpha(c) != 0;
+					});
+			});
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(name.Value(), std::string("letters-only"));
+	}
+
+	TEST(TextValidationRejectsValue)
+	{
+		SimulatedArgv args{ "--name", "abc123" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--name").ValidateText(
+			[](std::string_view text)
+			{
+				return std::none_of(
+					text.begin(), text.end(), [](unsigned char c)
+					{
+						return std::isdigit(c) != 0;
+					});
+			});
+
+		CHECK_ERROR(parser, Error::TEXT_VALIDATION_INVALID);
+	}
+
+	TEST(TransformationChangesStoredString)
+	{
+		SimulatedArgv args{ "--name", "MiXeD" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& name = parser.Add<std::string>("--name").Transform(
+			[](std::string& text)
+			{
+				std::transform(
+					text.begin(), text.end(), text.begin(), [](unsigned char c)
+					{
+						return static_cast<char>(std::tolower(c));
+					});
+				return true;
+			});
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(name.Value(), std::string("mixed"));
+	}
+
+	TEST(TransformationRunsBeforeNumericParsing)
+	{
+		SimulatedArgv args{ "--amount", "1,234" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& amount = parser.Add<std::int64_t>("--amount").Transform(
+			[](std::string& text)
+			{
+				std::erase(text, ',');
+				return true;
+			});
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(amount.Value(), std::int64_t{ 1234 });
+	}
+
+	TEST(TransformationFailure)
+	{
+		SimulatedArgv args{ "--name", "anything" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--name").Transform(
+			[](std::string&)
+			{
+				return false;
+			});
+
+		CHECK_ERROR(parser, Error::TRANSFORMATION_ERROR);
+	}
+
+	TEST(ValueValidationAcceptsParsedValue)
+	{
+		SimulatedArgv args{ "--scale", "2.5" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& scale = parser.Add<double>("--scale").ValidateValue(
+			[](const double& value)
+			{
+				return value > 0.0;
+			});
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_NEAR(scale.Value(), 2.5, 0.000001);
+	}
+
+	TEST(ValueValidationRejectsParsedValue)
+	{
+		SimulatedArgv args{ "--scale", "-0.5" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<double>("--scale").ValidateValue(
+			[](const double& value)
+			{
+				return value > 0.0;
+			});
+
+		CHECK_ERROR(parser, Error::VAL_VALIDATION_INVALID);
+	}
+
+	TEST(MultipleTransformationsRunInRegistrationOrder)
+	{
+		SimulatedArgv args{ "--name", "AbC" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& name = parser.Add<std::string>("--name")
+			.Transform(
+				[](std::string& value)
+				{
+					value += "-SUFFIX";
+					return true;
+				})
+			.Transform(
+				[](std::string& value)
+				{
+					std::transform(
+						value.begin(),
+						value.end(),
+						value.begin(),
+						[](unsigned char c)
+						{
+							return static_cast<char>(std::tolower(c));
+						});
+					return true;
+				});
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(name.Value(), std::string("abc-suffix"));
+	}
+
+	// -----------------------------------------------------------------------------
+	// Flags
+	// -----------------------------------------------------------------------------
+
+	TEST(FlagDefaultsFalse)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& debug = parser.AddFlag("--debug");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(debug.Value());
+	}
+
+	TEST(FlagCanonicalNameSetsTrue)
+	{
+		SimulatedArgv args{ "--debug" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& debug = parser.AddFlag("--debug");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(debug.Value());
+	}
+
+	TEST(FlagAliasSetsTrue)
+	{
+		SimulatedArgv args{ "-d" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& debug = parser.AddFlag("--debug", { "-d" }).Help("Debug output.");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(debug.Value());
+	}
+
+	TEST(MultipleFlagsAreIndependent)
+	{
+		SimulatedArgv args{ "--debug", "-v" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& debug = parser.AddFlag("--debug", { "-d" });
+		auto& verbose = parser.AddFlag("--verbose", { "-v" });
+		auto& quiet = parser.AddFlag("--quiet", { "-q" });
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(debug.Value());
+		CHECK(verbose.Value());
+		CHECK_FALSE(quiet.Value());
+	}
+
+	template <typename P>
+	concept SupportsAddBool = requires(P & parser)
+	{
+		parser.template Add<bool>("--bad-bool");
+	};
+
+	template <typename P>
+	void CheckAddBoolProducesFlagAsArg(P& parser)
+	{
+		if constexpr (SupportsAddBool<P>)
+		{
+			parser.template Add<bool>("--bad-bool");
+			CHECK_ERROR(parser, Error::FLAG_AS_ARG);
+		}
+		else
+		{
+			throw TestSkipped(
+				"Add<bool> is rejected at compile time by this header; "
+				"FLAG_AS_ARG cannot be reached through the visible API");
+		}
+	}
+
+	TEST(AddBoolReportsFlagAsArgWhenSupported)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		CheckAddBoolProducesFlagAsArg(parser);
+	}
+
+	// -----------------------------------------------------------------------------
+	// Positional arguments
+	// -----------------------------------------------------------------------------
+
+	TEST(RequiredPositionalArgument)
+	{
+		SimulatedArgv args{ "hello" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& text = parser.AddPositional<std::string>("text").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(text.Provided());
+		CHECK_EQ(text.Value(), std::string("hello"));
+	}
+
+	TEST(MissingRequiredPositionalArgument)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddPositional<std::string>("text").Required();
+
+		CHECK_ERROR(parser, Error::MISSING_REQUIRED);
+	}
+
+	TEST(OptionalPositionalUsesDefault)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& number = parser.AddPositional<std::int64_t>("number").Default(66);
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(number.Provided());
+		CHECK_EQ(number.Value(), std::int64_t{ 66 });
+	}
+
+	TEST(MultiplePositionalsAreAssignedInRegistrationOrder)
+	{
+		SimulatedArgv args{ "first", "42" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& first = parser.AddPositional<std::string>("first").Required();
+		auto& second = parser.AddPositional<std::int64_t>("second").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(first.Value(), std::string("first"));
+		CHECK_EQ(second.Value(), std::int64_t{ 42 });
+	}
+
+	TEST(NamedAndPositionalArgumentsMayBeInterleaved)
+	{
+		SimulatedArgv args{ "input.txt", "--count", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& input = parser.AddPositional<std::string>("input").Required();
+		auto& count = parser.Add<std::int64_t>("--count").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(input.Value(), std::string("input.txt"));
+		CHECK_EQ(count.Value(), std::int64_t{ 3 });
+	}
+
+	TEST(NamedArgumentMayAppearBeforePositional)
+	{
+		SimulatedArgv args{ "--count", "3", "input.txt" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& input = parser.AddPositional<std::string>("input").Required();
+		auto& count = parser.Add<std::int64_t>("--count").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(input.Value(), std::string("input.txt"));
+		CHECK_EQ(count.Value(), std::int64_t{ 3 });
+	}
+
+	TEST(NegativePositionalNumericValue)
+	{
+		SimulatedArgv args{ "-12" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.AddPositional<std::int64_t>("value").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(value.Value(), std::int64_t{ -12 });
+	}
+
+	TEST(PositionalTransformationAndValidation)
+	{
+		SimulatedArgv args{ "HELLO" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& text = parser.AddPositional<std::string>("text")
+			.Required()
+			.ValidateText(
+				[](std::string_view value)
+				{
+					return std::all_of(
+						value.begin(), value.end(), [](unsigned char c)
+						{
+							return std::isalpha(c) != 0;
+						});
+				})
+			.Transform(
+				[](std::string& value)
+				{
+					std::transform(
+						value.begin(),
+						value.end(),
+						value.begin(),
+						[](unsigned char c)
+						{
+							return static_cast<char>(std::tolower(c));
+						});
+					return true;
+				});
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(text.Value(), std::string("hello"));
+	}
+
+	TEST(ExtraPositionalTokenIsUnknown)
+	{
+		SimulatedArgv args{ "first", "extra" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddPositional<std::string>("first").Required();
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	// -----------------------------------------------------------------------------
+	// Aggregates
+	// -----------------------------------------------------------------------------
+
+	TEST(AggregateExactCount)
+	{
+		SimulatedArgv args{ "--items", "1", "2", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(items.Provided());
+		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
+	}
+
+	TEST(AggregateAlias)
+	{
+		SimulatedArgv args{ "-i", "4", "5" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items =
+			parser.AddAggregate<std::int64_t>("--items", { "-i" }).Count(2);
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(items.Provided());
+		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 4, 5 }));
+	}
+
+	TEST(AggregateEqualsSyntaxIsUnknownValue)
+	{
+		SimulatedArgv args{ "--items=1", "2", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").Count(3);
+
+		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(AggregateStopsAtNextRecognizedOption)
+	{
+		SimulatedArgv args{
+			"--items", "1", "2", "3", "--scale", "2.5", "--debug"
+		};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
+		auto& scale = parser.Add<double>("--scale").Required();
+		auto& debug = parser.AddFlag("--debug");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
+		CHECK_NEAR(scale.Value(), 2.5, 0.000001);
+		CHECK(debug.Value());
+	}
+
+	TEST(AggregateAcceptsNegativeNumbers)
+	{
+		SimulatedArgv args{ "--items", "-1", "-2", "-3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Count(3);
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ -1, -2, -3 }));
+	}
+
+	TEST(AggregateMinAndMaxCount)
+	{
+		SimulatedArgv args{ "--items", "1", "2", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items")
+			.MinCount(2)
+			.MaxCount(4);
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
+	}
+
+	TEST(AggregateMinAndUnlimited)
+	{
+		SimulatedArgv args{ "--items", "1", "2", "3", "4", "5", "6" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items")
+			.MinCount(2)
+			.Unlimited();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(
+			items.Value(),
+			std::vector<std::int64_t>({ 1, 2, 3, 4, 5, 6 }));
+	}
+
+	TEST(OptionalAggregateWithoutValueIsNotProvided)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items").Count(2);
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(items.Provided());
+	}
+
+	TEST(AggregateDefaultIsUsedAndNotProvided)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items")
+			.Count(2)
+			.Default({ 7, 8 });
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(items.Provided());
+		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 7, 8 }));
+	}
+
+	TEST(ExplicitAggregateOverridesDefault)
+	{
+		SimulatedArgv args{ "--items", "1", "2" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items")
+			.Count(2)
+			.Default({ 7, 8 });
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(items.Provided());
+		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2 }));
+	}
+
+	TEST(RequiredAggregatePresent)
+	{
+		SimulatedArgv args{ "--items", "1", "2" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items")
+			.Required()
+			.Count(2);
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(items.Provided());
+	}
+
+	TEST(RequiredAggregateMissing)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").Required().Count(2);
+
+		CHECK_ERROR(parser, Error::MISSING_REQUIRED);
+	}
+
+	TEST(AggregateTooFewValues)
+	{
+		SimulatedArgv args{ "--items", "1", "2" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").Count(3);
+
+		CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
+	}
+
+	TEST(AggregateTooManyValues)
+	{
+		SimulatedArgv args{ "--items", "1", "2", "3", "4" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").MaxCount(3).MinCount(1);
+
+		CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
+	}
+
+	TEST(AggregateBelowMinimum)
+	{
+		SimulatedArgv args{ "--items", "1" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").MinCount(2).Unlimited();
+
+		CHECK_ERROR(parser, Error::CARDINALITY_ERROR);
+	}
+
+	TEST(AggregateElementParseFailure)
+	{
+		SimulatedArgv args{ "--items", "1", "bad", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").Count(3);
+
+		CHECK_ERROR(parser, Error::PARSE_FAIL);
+	}
+
+	TEST(AggregateTextValidationFailure)
+	{
+		SimulatedArgv args{ "--items", "good", "bad2" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::string>("--items")
+			.Count(2)
+			.ValidateText(
+				[](std::string_view value)
+				{
+					return std::none_of(
+						value.begin(), value.end(), [](unsigned char c)
+						{
+							return std::isdigit(c) != 0;
+						});
+				});
+
+		CHECK_ERROR(parser, Error::TEXT_VALIDATION_INVALID);
+	}
+
+	TEST(AggregateValueValidationFailure)
+	{
+		SimulatedArgv args{ "--items", "1", "-2", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items")
+			.Count(3)
+			.ValidateValue(
+				[](const std::int64_t& value)
+				{
+					return value > 0;
+				});
+
+		CHECK_ERROR(parser, Error::VAL_VALIDATION_INVALID);
+	}
+
+	TEST(AggregateTransformationAppliesToEachElement)
+	{
+		SimulatedArgv args{ "--items", "ONE", "TWO" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::string>("--items")
+			.Count(2)
+			.Transform(
+				[](std::string& value)
+				{
+					std::transform(
+						value.begin(),
+						value.end(),
+						value.begin(),
+						[](unsigned char c)
+						{
+							return static_cast<char>(std::tolower(c));
+						});
+					return true;
+				});
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(items.Value(), std::vector<std::string>({ "one", "two" }));
+	}
+
+	TEST(AggregateTransformationFailure)
+	{
+		SimulatedArgv args{ "--items", "good", "reject" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::string>("--items")
+			.Count(2)
+			.Transform(
+				[](std::string& value)
+				{
+					return value != "reject";
+				});
+
+		CHECK_ERROR(parser, Error::TRANSFORMATION_ERROR);
+	}
+
+	TEST(AggregateCollectionValidationAcceptsCollection)
+	{
+		SimulatedArgv args{ "--items", "1", "2", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items")
+			.Count(3)
+			.ValidateCollection(
+				[](const std::vector<std::int64_t>& values)
+				{
+					return values ==
+						std::vector<std::int64_t>({ 1, 2, 3 });
+				});
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(items.Value().size(), std::size_t{ 3 });
+	}
+
+	TEST(AggregateCollectionValidationRejectsCollection)
+	{
+		SimulatedArgv args{ "--items", "1", "2", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items")
+			.Count(3)
+			.ValidateCollection(
+				[](const std::vector<std::int64_t>& values)
+				{
+					const auto sum = values[0] + values[1] + values[2];
+					return sum < 5;
+				});
+
+		CHECK_ERROR(parser, Error::COL_VALIDATION_INVALID);
+	}
+
+	TEST(AggregateHelpMetadataDoesNotAffectParsing)
+	{
+		SimulatedArgv args{ "--items", "1", "2" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::int64_t>("--items")
+			.Count(2)
+			.Help("Two integers.");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2 }));
+	}
+
+	// -----------------------------------------------------------------------------
+	// Help query handling
+	// -----------------------------------------------------------------------------
+
+	TEST(LongHelpReturnsHelpQuery)
+	{
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Help("Application help.");
+
+		CHECK_ERROR(parser, Error::HELP_QUERY);
+	}
+
+	TEST(ShortHelpReturnsHelpQuery)
+	{
+		SimulatedArgv args{ "-h" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Help("Application help.");
+
+		CHECK_ERROR(parser, Error::HELP_QUERY);
+	}
+
+	TEST(HelpQueryTakesPriorityOverMissingRequiredArguments)
+	{
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--required").Required();
+
+		CHECK_ERROR(parser, Error::HELP_QUERY);
+	}
+
+	// -----------------------------------------------------------------------------
+	// Invalid parser configurations, reported by ValidateArgs(false)
+	// -----------------------------------------------------------------------------
+
+	TEST(RequiredScalarCannotHaveDefault)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count").Required().Default(5);
+
+		CHECK_ERROR(parser, Error::REQUIRED_HAS_DEFAULT);
+	}
+
+	TEST(RequiredAggregateCannotHaveDefault)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items")
+			.Count(2)
+			.Required()
+			.Default({ 1, 2 });
+
+		CHECK_ERROR(parser, Error::REQUIRED_HAS_DEFAULT);
+	}
+
+	TEST(ScalarDefaultCannotBeSetTwice)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count").Default(1).Default(2);
+
+		CHECK_ERROR(parser, Error::DEFAULT_ALREADY_SET);
+	}
+
+	TEST(AggregateDefaultCannotBeSetTwice)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items")
+			.Count(2)
+			.Default({ 1, 2 })
+			.Default({ 3, 4 });
+
+		CHECK_ERROR(parser, Error::DEFAULT_ALREADY_SET);
+	}
+
+	TEST(RequiredPositionalCannotFollowOptionalPositional)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddPositional<std::string>("optional").Default("default");
+		parser.AddPositional<std::string>("required").Required();
+
+		CHECK_ERROR(parser, Error::REQ_POS_AFTER_OPTIONAL);
+	}
+
+	TEST(DuplicateCanonicalName)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--name");
+		parser.Add<std::int64_t>("--name");
+
+		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+	}
+
+	TEST(AliasCollidesWithCanonicalName)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--first", { "-f" });
+		parser.Add<std::string>("-f");
+
+		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+	}
+
+	TEST(AliasCollidesWithAnotherAlias)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--first", { "-x" });
+		parser.Add<std::string>("--second", { "-x" });
+
+		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+	}
+
+	TEST(FlagNameCollidesWithArgumentName)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddFlag("--debug");
+		parser.Add<std::string>("--debug");
+
+		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+	}
+
+	TEST(FlagAliasCollidesWithArgumentName)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddFlag("--flag", {"--debug"});
+		parser.Add<std::string>("--debug");
+
+		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+	}
+
+	TEST(AggregateMustDeclareCardinality)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items");
+
+		CHECK_ERROR(parser, Error::NO_CARDINALITY_SET);
+	}
+
+	TEST(MinimumWithoutMaximumOrUnlimited)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").MinCount(2);
+
+		CHECK_ERROR(parser, Error::MAX_COUNT_NOT_SET);
+	}
+
+	TEST(MaximumWithoutMinimum)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").MaxCount(5);
+
+		CHECK_ERROR(parser, Error::MIN_COUNT_NOT_SET);
+	}
+
+	TEST(ExactCountClashesWithMinimum)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").Count(3).MinCount(1);
+
+		CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
+	}
+
+	TEST(ExactCountClashesWithMaximum)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").Count(3).MaxCount(5);
+
+		CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
+	}
+
+	TEST(MaximumClashesWithUnlimited)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items")
+			.MinCount(1)
+			.MaxCount(5)
+			.Unlimited();
+
+		CHECK_ERROR(parser, Error::CARDINALITY_INCOMPATIBLE);
+	}
+
+	TEST(MinimumGreaterThanMaximumIsCardinalityError)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").MinCount(5).MaxCount(2);
+
+		CHECK_ERROR(parser, Error::MIN_GREATER_MAX);
+	}
+
+	// -----------------------------------------------------------------------------
+	// Full example-style integration test
+	// -----------------------------------------------------------------------------
+
+	TEST(FullExampleStyleCommandLine)
+	{
+		SimulatedArgv args{
+			"--path", "SomeFile.TXT",
+			"--output", "RESULT.TXT",
+			"--count", "7",
+			"--scale", "2.5",
+			"-d",
+			"HELLO",
+			"-12",
+			"--floats", "1.5", "2.0", "3.25", "4.0"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+
+		auto lowercase = [](std::string& value)
+			{
+				std::transform(
+					value.begin(), value.end(), value.begin(), [](unsigned char c)
+					{
+						return static_cast<char>(std::tolower(c));
+					});
+				return true;
+			};
+
+		auto no_numbers = [](std::string_view value)
+			{
+				return std::none_of(
+					value.begin(), value.end(), [](unsigned char c)
+					{
+						return std::isdigit(c) != 0;
+					});
+			};
+
+		auto non_negative_text = [](std::string_view value)
+			{
+				return value.empty() || value.front() != '-';
+			};
+
+		auto positive_double = [](const double& value)
+			{
+				return value > 0.0;
+			};
+
+		auto& path = parser.Add<std::string>("--path", { "-p", "--filepath" })
+			.Required()
+			.ValidateText(no_numbers)
+			.Transform(lowercase)
+			.Help("Path to the input file.");
+
+		auto& output = parser.Add<std::string>("--output", { "-o" })
+			.Default("output.txt")
+			.Transform(lowercase);
+
+		auto& count = parser.Add<std::int64_t>("--count", { "-c" })
+			.Default(5)
+			.ValidateText(non_negative_text);
+
+		auto& scale = parser.Add<double>("--scale", { "-s" })
+			.Default(1.0)
+			.ValidateValue(positive_double);
+
+		auto& debug = parser.AddFlag("--debug", { "-d" });
+		auto& verbose = parser.AddFlag("--verbose", { "-v" });
+
+		auto& positional_text = parser.AddPositional<std::string>("text")
+			.Required()
+			.Transform(lowercase)
+			.ValidateText(no_numbers);
+
+		auto& positional_num = parser.AddPositional<std::int64_t>("num")
+			.Default(66);
+
+		auto& floats = parser.AddAggregate<double>("--floats")
+			.ValidateValue(positive_double)
+			.Required()
+			.MinCount(3)
+			.Unlimited();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+
+		CHECK_EQ(path.Value(), std::string("somefile.txt"));
+		CHECK(path.Provided());
+
+		CHECK_EQ(output.Value(), std::string("result.txt"));
+		CHECK(output.Provided());
+
+		CHECK_EQ(count.Value(), std::int64_t{ 7 });
+		CHECK(count.Provided());
+
+		CHECK_NEAR(scale.Value(), 2.5, 0.000001);
+		CHECK(scale.Provided());
+
+		CHECK(debug.Value());
+		CHECK_FALSE(verbose.Value());
+
+		CHECK_EQ(positional_text.Value(), std::string("hello"));
+		CHECK(positional_text.Provided());
+
+		CHECK_EQ(positional_num.Value(), std::int64_t{ -12 });
+		CHECK(positional_num.Provided());
+
+		CHECK(floats.Provided());
+		CHECK_EQ(floats.Value().size(), std::size_t{ 4 });
+		CHECK_NEAR(floats.Value()[0], 1.5, 0.000001);
+		CHECK_NEAR(floats.Value()[1], 2.0, 0.000001);
+		CHECK_NEAR(floats.Value()[2], 3.25, 0.000001);
+		CHECK_NEAR(floats.Value()[3], 4.0, 0.000001);
+	}
+
+	TEST(LegacyTooFewArgsIsDocumentedAsUnreachable)
+	{
+		throw TestSkipped(
+			"Error::TOO_FEW_ARGS is legacy and has no documented trigger through "
+			"the current public API");
+	}
 
 } // namespace parser_tests
 
 int main()
 {
-    std::size_t passed = 0;
-    std::size_t failed = 0;
-    std::size_t skipped = 0;
+	std::size_t passed = 0;
+	std::size_t failed = 0;
+	std::size_t skipped = 0;
 
-    for (const parser_tests::TestCase& test : parser_tests::Registry())
-    {
-        try
-        {
-            test.function();
-            ++passed;
-            std::cout << "[PASS] " << test.name << '\n';
-        }
-        catch (const parser_tests::TestSkipped& error)
-        {
-            ++skipped;
-            std::cout << "[SKIP] " << test.name << ": " << error.what() << '\n';
-        }
-        catch (const std::exception& error)
-        {
-            ++failed;
-            std::cerr << "[FAIL] " << test.name << ": " << error.what() << '\n';
-        }
-        catch (...)
-        {
-            ++failed;
-            std::cerr << "[FAIL] " << test.name << ": unknown exception\n";
-        }
-    }
+	std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 
-    std::cout << "\nSummary: " << passed << " passed, " << failed << " failed, "
-        << skipped << " skipped, "
-        << parser_tests::Registry().size() << " total\n";
+	for (const parser_tests::TestCase& test : parser_tests::Registry())
+	{
+		try
+		{
+			test.function();
+			++passed;
+			std::cout << "[PASS] " << test.name << '\n';
+		}
+		catch (const parser_tests::TestSkipped& error)
+		{
+			++skipped;
+			std::cout << "[SKIP] " << test.name << ": " << error.what() << '\n';
+		}
+		catch (const std::exception& error)
+		{
+			++failed;
+			std::cerr << "[FAIL] " << test.name << ": " << error.what() << '\n';
+		}
+		catch (...)
+		{
+			++failed;
+			std::cerr << "[FAIL] " << test.name << ": unknown exception\n";
+		}
+	}
 
-    return failed == 0 ? 0 : 1;
+	std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+	std::chrono::milliseconds dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::duration(end - start));
+
+	std::cout << "\nSummary: " << passed << " passed, " << failed << " failed, "
+		<< skipped << " skipped, "
+		<< parser_tests::Registry().size() << " total\n";
+
+	std::cout << "Tests run in " << dur << '\n';
+
+	return failed == 0 ? 0 : 1;
 }
