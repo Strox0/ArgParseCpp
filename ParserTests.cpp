@@ -433,12 +433,13 @@ namespace parser_tests
 
 	TEST(NamedArgumentEqualsSyntaxIsUnknownValue)
 	{
-		// No whitespace means this remains one token; equals syntax is unsupported.
 		SimulatedArgv args{ "--count=17" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::int64_t>("--count");
+		auto& c = parser.Add<std::int64_t>("--count");
 
-		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(c.Provided());
+		CHECK_EQ(c.Value(), std::int64_t{ 17 });
 	}
 
 	TEST(NamedArgumentCommandLineStringIsSplitOnWhitespace)
@@ -463,22 +464,24 @@ namespace parser_tests
 		CHECK_EQ(count.Value(), std::int64_t{ 21 });
 	}
 
-	TEST(NamedArgumentAliasEqualsSyntaxIsUnknownValue)
+	TEST(NamedArgumentAliasEqualsSyntaxSuccess)
 	{
 		SimulatedArgv args{ "-c=21" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::int64_t>("--count", { "-c" });
+		auto& count = parser.Add<std::int64_t>("--count", { "-c" });
 
-		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK(count.Provided());
+		CHECK_EQ(count.Value(), std::int64_t{ 21 });
 	}
 
-	TEST(NamedStringEqualsSyntaxIsUnknownValue)
+	TEST(NamedStringEqualsSyntaxSuccess)
 	{
 		SimulatedArgv args{ "--name=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.Add<std::string>("--name");
 
-		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+		CHECK_ERROR(parser, Error::SUCCESS);
 	}
 
 	TEST(OptionalArgumentWithoutDefaultIsNotProvided)
@@ -551,13 +554,13 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::PARSE_FAIL);
 	}
 
-	TEST(EmptyNumericEqualsSyntaxIsUnknownValue)
+	TEST(EmptyNumericRequiredEqualsSyntaxMissingRequired)
 	{
 		SimulatedArgv args{ "--count=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::int64_t>("--count");
+		parser.Add<std::int64_t>("--count").Required();
 
-		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+		CHECK_ERROR(parser, Error::MISSING_REQUIRED);
 	}
 
 	TEST(NegativeNamedNumericValueIsNotMistakenForOption)
@@ -977,13 +980,14 @@ namespace parser_tests
 		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 4, 5 }));
 	}
 
-	TEST(AggregateEqualsSyntaxIsUnknownValue)
+	TEST(AggregateEqualsSyntaxSuccess)
 	{
 		SimulatedArgv args{ "--items=1", "2", "3" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").Count(3);
+		auto& aggr = parser.AddAggregate<std::int64_t>("--items").Count(3);
 
-		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(aggr.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
 	}
 
 	TEST(AggregateStopsAtNextRecognizedOption)
