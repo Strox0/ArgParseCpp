@@ -37,14 +37,21 @@ Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUC
 
 Parser::Flag& Parser::ArgParser::AddFlag(std::string_view name, const std::vector<std::string>& aliases)
 {
-	if (m_names.contains(std::string(name)))
+	std::vector<std::string> names;
+	names.push_back(std::string(name));
+	names.insert(names.end(), aliases.begin(), aliases.end());
+
+	for (const auto& n : names)
 	{
-		m_error = Error::NAME_ALREADY_USED;
-		m_args.emplace_back(std::make_unique<Flag>());
-		return *(Flag*)m_args.back().get();
+		if (m_names.contains(std::string(n)))
+		{
+			m_error = Error::NAME_ALREADY_USED;
+			m_args.emplace_back(std::make_unique<Flag>());
+			return *(Flag*)m_args.back().get();
+		}
+		else
+			m_names.insert(std::string(n));
 	}
-	else
-		m_names.insert(std::string(name));
 
 	auto it = std::find(m_tokens.begin(), m_tokens.end(), name);
 	if (!aliases.empty() && it == m_tokens.end())
