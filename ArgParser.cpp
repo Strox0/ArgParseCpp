@@ -70,11 +70,11 @@ void Parser::ArgParser::Help(std::string_view v)
 		m_help += '\n';
 }
 
-Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
+Parser::Error Parser::ArgParser::ParseAndValidate(ErrorPolicy error_policy)
 {
 	if (m_error != Parser::Error::SUCCESS)
 	{
-		return HandleError(exit);
+		return HandleError(error_policy);
 	}
 
 	if (std::find(m_tokens.begin(), m_tokens.end(), "--help") != m_tokens.end() ||
@@ -88,10 +88,8 @@ Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
 			std::cout << arg->GetHelp();
 		}
 
-		if (exit)
-			std::exit(0);
-		else
-			return Error::HELP_QUERY;
+		m_error = Error::HELP_QUERY;
+		return HandleError(error_policy, 0);
 	}
 
 	for (auto& arg : m_args)
@@ -114,7 +112,7 @@ Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
 				if (m_names.contains(*(it + 1)))
 				{
 					m_error = Error::MISSING_VALUE;
-					return HandleError(exit);
+					return HandleError(error_policy);
 				}
 				else
 				{
@@ -125,7 +123,7 @@ Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
 			else
 			{
 				m_error = Error::MISSING_VALUE;
-				return HandleError(exit);
+				return HandleError(error_policy);
 			}
 		}
 	}
@@ -176,7 +174,7 @@ Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
 	if (!m_tokens.empty())
 	{
 		m_error = Parser::Error::UNKNOWN_VALUE;
-		return HandleError(exit);
+		return HandleError(error_policy);
 	}
 
 	for (auto& arg : m_aggregates)
@@ -185,7 +183,7 @@ Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
 		m_error = arg->GetError();
 		if (m_error != Parser::Error::SUCCESS)
 		{
-			return HandleError(exit);
+			return HandleError(error_policy);
 		}
 	}
 
@@ -197,14 +195,14 @@ Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
 		else if (!m_pos_req && arg->m_required)
 		{
 			m_error = Error::REQ_POS_AFTER_OPTIONAL;
-			return HandleError(exit);
+			return HandleError(error_policy);
 		}
 
 		arg->Finalize();
 		m_error = arg->GetError();
 		if (m_error != Parser::Error::SUCCESS)
 		{
-			return HandleError(exit);
+			return HandleError(error_policy);
 		}
 	}
 
@@ -214,18 +212,18 @@ Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
 		m_error = arg->GetError();
 		if (m_error != Parser::Error::SUCCESS)
 		{
-			return HandleError(exit);
+			return HandleError(error_policy);
 		}
 	}
 
 	return Parser::Error::SUCCESS;
 }
 
-Parser::Error Parser::ArgParser::HandleError(bool exit)
+Parser::Error Parser::ArgParser::HandleError(ErrorPolicy error_policy, int exit_code)
 {
 	std::cout << "Arg Error: " << (int)m_error << std::endl;
-	if (exit)
-		std::exit(1);
+	if (error_policy == ErrorPolicy::Exit)
+		std::exit(exit_code);
 	return m_error;
 }
 

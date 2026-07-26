@@ -38,6 +38,12 @@ namespace Parser
 		CARDINALITY_VALIDATION_FAIL,
 	};
 
+	enum class ErrorPolicy
+	{
+		Return,
+		Exit
+	};
+
 	bool Parse(std::string_view v, int64_t& out);
 	bool Parse(std::string_view v, uint64_t& out);
 	bool Parse(std::string_view v, int32_t& out);
@@ -253,10 +259,10 @@ namespace Parser
 
 		void Help(std::string_view help_msg);
 
-		Error ValidateArgs(bool exit = true);
+		Error ParseAndValidate(ErrorPolicy error_policy);
 
 	private:
-		Error HandleError(bool exit);
+		Error HandleError(ErrorPolicy error_policy, int exit_code = 1);
 
 	private:
 		std::vector<std::unique_ptr<ArgumentBase>> m_args;

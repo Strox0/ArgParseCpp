@@ -98,7 +98,7 @@ namespace parser_tests
 	} while (false)
 
 #define CHECK_ERROR(parser_expression, expected_error)                           \
-	CHECK_EQ((parser_expression).ValidateArgs(false), (expected_error))
+	CHECK_EQ((parser_expression).ParseAndValidate(Parser::ErrorPolicy::Return), (expected_error))
 
 	class SimulatedArgv
 	{
