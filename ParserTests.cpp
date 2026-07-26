@@ -1425,6 +1425,16 @@ namespace parser_tests
 		CHECK_EQ(f.ValueOr(7.8), 9.7);
 	}
 
+	TEST(MissingValueForArgument)
+	{
+		SimulatedArgv args{ "--count", "--float", "9.7" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& c = parser.Add<int32_t>("--count");
+		auto& f = parser.Add<double>("--float");
+
+		CHECK_ERROR(parser, Error::MISSING_VALUE);
+	}
+
 	// -----------------------------------------------------------------------------
 	// Full example-style integration test
 	// -----------------------------------------------------------------------------
