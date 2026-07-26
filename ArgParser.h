@@ -76,7 +76,7 @@ namespace Parser
 	protected:
 		virtual void Finalize() = 0;
 		virtual void AppendValue(std::string_view value) {};
-		void AddValue(std::string_view value);
+		virtual void AddValue(std::string_view value);
 
 		Error m_error = Error::SUCCESS;
 		std::string m_help;
@@ -146,6 +146,7 @@ namespace Parser
 
 	protected:
 		void Finalize() override;
+		void AddValue(std::string_view val) override {};
 
 	private:
 		bool m_state = false;
@@ -286,44 +287,10 @@ namespace Parser
 				m_names.insert(std::string(n));
 		}
 
-		auto it = std::find(m_tokens.begin(), m_tokens.end(), name);
-		if (!aliases.empty() && it == m_tokens.end())
-		{
-			for (const auto& n : aliases)
-			{
-				if (it != m_tokens.end())
-					break;
-				it = std::find(m_tokens.begin(), m_tokens.end(), n);
-			}
-		}
+		if (typeid(bool) == typeid(T))
+			m_error = Error::FLAG_AS_ARG;
 
-		if (it == m_tokens.end())
-		{
-			m_args.emplace_back(std::make_unique<Argument<T>>());
-		}
-		else
-		{
-			if (typeid(bool) == typeid(T))
-			{
-				m_error = Error::FLAG_AS_ARG;
-				m_args.emplace_back(std::make_unique<Argument<T>>());
-			}
-			else
-			{
-				if (it + 1 != m_tokens.end())
-				{
-					m_args.emplace_back(std::make_unique<Argument<T>>(*(it + 1)));
-					m_tokens.erase(it, it + 2);
-				}
-				else
-				{
-					m_args.emplace_back(std::make_unique<Argument<T>>());
-					m_error = Error::MISSING_VALUE;
-					m_tokens.erase(it);
-				}
-			}
-		}
-
+		m_args.emplace_back(std::make_unique<Argument<T>>());
 		m_args.back()->AddName(name);
 		m_args.back()->AddAliases(aliases);
 		return *(Argument<T>*)m_args.back().get();

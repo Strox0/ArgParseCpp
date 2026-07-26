@@ -475,13 +475,13 @@ namespace parser_tests
 		CHECK_EQ(count.Value(), std::int64_t{ 21 });
 	}
 
-	TEST(NamedStringEqualsSyntaxSuccess)
+	TEST(NamedStringEqualsSyntaxMissingValue)
 	{
 		SimulatedArgv args{ "--name=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.Add<std::string>("--name");
 
-		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_ERROR(parser, Error::MISSING_VALUE);
 	}
 
 	TEST(OptionalArgumentWithoutDefaultIsNotProvided)
@@ -554,13 +554,13 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::PARSE_FAIL);
 	}
 
-	TEST(EmptyNumericRequiredEqualsSyntaxMissingRequired)
+	TEST(EmptyNumericRequiredEqualsSyntaxMissingValue)
 	{
 		SimulatedArgv args{ "--count=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.Add<std::int64_t>("--count").Required();
 
-		CHECK_ERROR(parser, Error::MISSING_REQUIRED);
+		CHECK_ERROR(parser, Error::MISSING_VALUE);
 	}
 
 	TEST(NegativeNamedNumericValueIsNotMistakenForOption)
@@ -1561,12 +1561,12 @@ int main()
 		{
 			test.function();
 			++passed;
-			std::cout << "[PASS] " << test.name << '\n';
+			//std::cout << "[PASS] " << test.name << '\n';
 		}
 		catch (const parser_tests::TestSkipped& error)
 		{
 			++skipped;
-			std::cout << "[SKIP] " << test.name << ": " << error.what() << '\n';
+			//std::cout << "[SKIP] " << test.name << ": " << error.what() << '\n';
 		}
 		catch (const std::exception& error)
 		{

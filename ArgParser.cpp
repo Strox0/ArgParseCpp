@@ -9,8 +9,12 @@ Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUC
 		size_t index = token.find('=');
 		if (index != token.npos)
 		{
-			m_tokens.emplace_back(token.substr(0, index));
-			m_tokens.emplace_back(token.substr(index + 1));
+			std::string t1 = token.substr(0, index);
+			std::string t2 = token.substr(index + 1);
+			if (!t1.empty())
+				m_tokens.emplace_back(t1);
+			if (!t2.empty())
+				m_tokens.emplace_back(t2);
 		}
 		else
 			m_tokens.emplace_back(argv[i]);
@@ -88,6 +92,42 @@ Parser::Error Parser::ArgParser::ValidateArgs(bool exit)
 			std::exit(0);
 		else
 			return Error::HELP_QUERY;
+	}
+
+	for (auto& arg : m_args)
+	{
+		auto it = std::find(m_tokens.begin(), m_tokens.end(), arg->GetName());
+		if (!arg->GetAliases().empty() && it == m_tokens.end())
+		{
+			for (const auto& n : arg->GetAliases())
+			{
+				if (it != m_tokens.end())
+					break;
+				it = std::find(m_tokens.begin(), m_tokens.end(), n);
+			}
+		}
+
+		if (it != m_tokens.end())
+		{
+			if (it + 1 != m_tokens.end())
+			{
+				if (m_names.contains(*(it + 1)))
+				{
+					m_error = Error::MISSING_VALUE;
+					return HandleError(exit);
+				}
+				else
+				{
+					arg->AddValue(*(it + 1));
+					m_tokens.erase(it, it + 2);
+				}
+			}
+			else
+			{
+				m_error = Error::MISSING_VALUE;
+				return HandleError(exit);
+			}
+		}
 	}
 
 	for (auto& arg : m_aggregates)
