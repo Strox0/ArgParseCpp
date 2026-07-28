@@ -19,21 +19,24 @@ Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUC
 
 Parser::Flag& Parser::ArgParser::AddFlag(const std::string& name, const std::vector<std::string>& aliases)
 {
+	if (m_locked)
+		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
 	CheckAndRegisterNames(name, aliases);
 	m_args.emplace_back(std::make_unique<Flag>());
-	if (m_error == Error::SUCCESS)
-	{
-		m_name_arg_map[name] = std::make_pair(ArgType::Flag, m_args.back());
-		m_args.back()->AddName(name);
-		m_args.back()->AddAliases(aliases);
-	}
+	m_name_arg_map[name] = std::make_pair(ArgType::Flag, m_args.back());
+	m_args.back()->AddName(name);
+	m_args.back()->AddAliases(aliases);
 	return *(Flag*)m_args.back().get();
 }
 
 void Parser::ArgParser::Help(std::string_view v)
 {
+	if (m_locked)
+		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
 	if (v.empty())
-		return;
+		throw std::logic_error("Help message cannot be empty");
 
 	m_help = v;
 	if (m_help.back() != '\n')
@@ -42,6 +45,11 @@ void Parser::ArgParser::Help(std::string_view v)
 
 Parser::Error Parser::ArgParser::ParseAndValidate()
 {
+	if (m_locked)
+		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
+	m_locked = true;
+
 	if (m_error != Parser::Error::SUCCESS)
 	{
 		return HandleError();

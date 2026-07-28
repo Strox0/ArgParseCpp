@@ -278,25 +278,29 @@ namespace Parser
 		std::string m_help;
 		std::unordered_map<std::string, std::pair<ArgType,std::shared_ptr<ArgumentBase>>> m_name_arg_map;
 		std::unordered_map<std::string, std::string> m_alias_map;
+		bool m_locked = false;
 	};
 
 	template<typename T>
 	inline Argument<T>& ArgParser::Add(const std::string& name, const std::vector<std::string>& aliases)
 	{
+		if (m_locked)
+			throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
 		CheckAndRegisterNames(name, aliases);
 		m_args.emplace_back(std::make_shared<Argument<T>>());
-		if (m_error == Error::SUCCESS)
-		{
-			m_name_arg_map[name] = std::make_pair(ArgType::Scalar, m_args.back());
-			m_args.back()->AddName(name);
-			m_args.back()->AddAliases(aliases);
-		}
+		m_name_arg_map[name] = std::make_pair(ArgType::Scalar, m_args.back());
+		m_args.back()->AddName(name);
+		m_args.back()->AddAliases(aliases);
 		return *(Argument<T>*)m_args.back().get();
 	}
 
 	template<typename T>
 	inline Argument<T>& ArgParser::AddPositional(const std::string& helper_name)
 	{
+		if (m_locked)
+			throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
 		m_positionals.emplace_back(std::make_unique<Argument<T>>());
 		m_positionals.back()->AddName(helper_name);
 		return *(Argument<T>*)m_positionals.back().get();
@@ -305,14 +309,14 @@ namespace Parser
 	template<typename T>
 	inline Aggregate<T>& ArgParser::AddAggregate(const std::string& name, const std::vector<std::string>& aliases)
 	{
+		if (m_locked)
+			throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
 		CheckAndRegisterNames(name, aliases);
 		m_args.emplace_back(std::make_shared<Aggregate<T>>());
-		if (m_error == Error::SUCCESS)
-		{
-			m_name_arg_map[name] = std::make_pair(ArgType::Aggregate, m_args.back());
-			m_args.back()->AddName(name);
-			m_args.back()->AddAliases(aliases);
-		}
+		m_name_arg_map[name] = std::make_pair(ArgType::Aggregate, m_args.back());
+		m_args.back()->AddName(name);
+		m_args.back()->AddAliases(aliases);
 		return *(Aggregate<T>*)m_args.back().get();
 	}
 
@@ -588,8 +592,12 @@ namespace Parser
 	template<Parseable T>
 	inline Aggregate<T>& Aggregate<T>::Unlimited()
 	{
+		if (m_locked)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+
 		if (m_card_set)
 			throw std::logic_error("Cardinality already configured");
+		m_card_set = true;
 		return *this;
 	}
 
@@ -853,6 +861,8 @@ namespace Parser
 		case Parser::Aggregate<T>::Cardinality::ATMOST:
 			if (m_parsed_vals.size() > m_max_count)
 				return Error::CARDINALITY_VALIDATION_FAIL;
+			break;
+		case Parser::Aggregate<T>::Cardinality::UNLIMITED:
 			break;
 		}
 
