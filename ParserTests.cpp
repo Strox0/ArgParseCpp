@@ -100,6 +100,29 @@ namespace parser_tests
 #define CHECK_ERROR(parser_expression, expected_error)                           \
 	CHECK_EQ((parser_expression).ParseAndValidate(), (expected_error))
 
+	template <typename Exception, typename Callable>
+	void CheckThrowsAs(Callable&& callable, const char* expression, const char* file, int line)
+	{
+		try
+		{
+			std::invoke(std::forward<Callable>(callable));
+		}
+		catch (const Exception&)
+		{
+			return;
+		}
+		catch (...)
+		{
+			Fail(expression, file, line, "unexpected exception type");
+		}
+
+		Fail(expression, file, line, "no exception was thrown");
+	}
+
+#define CHECK_THROWS_AS(expression, exception_type)                              \
+	::parser_tests::CheckThrowsAs<exception_type>(                               \
+		[&]() { static_cast<void>(expression); }, #expression, __FILE__, __LINE__)
+
 	class SimulatedArgv
 	{
 	public:
@@ -515,7 +538,7 @@ namespace parser_tests
 		CHECK_EQ(count.Value(), std::int64_t{ 21 });
 	}
 
-	TEST(NamedStringEqualsSyntaxPreservesEmptyValue)
+	TEST(NamedStringEmptyEqualsSyntaxIsMissingValue)
 	{
 		SimulatedArgv args{ "--name=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
@@ -594,7 +617,7 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::PARSE_FAIL);
 	}
 
-	TEST(EmptyNumericRequiredEqualsSyntaxIsParseFailure)
+	TEST(EmptyNumericRequiredEqualsSyntaxIsMissingValue)
 	{
 		SimulatedArgv args{ "--count=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
@@ -631,7 +654,7 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
 	}
 
-	TEST(ReturnPolicyDoesNotWriteErrorsToStdout)
+	TEST(ParseErrorsDoNotWriteToStdout)
 	{
 		SimulatedArgv args{ "--count", "invalid" };
 		Parser::ArgParser parser(args.argc(), args.argv());
@@ -909,27 +932,9 @@ namespace parser_tests
 		parser.template Add<bool>("--bad-bool");
 	};
 
-	template <typename P>
-	void CheckAddBoolProducesFlagAsArg(P& parser)
+	TEST(AddBoolIsRejectedAtCompileTime)
 	{
-		if constexpr (SupportsAddBool<P>)
-		{
-			parser.template Add<bool>("--bad-bool");
-			CHECK_ERROR(parser, Error::FLAG_AS_ARG);
-		}
-		else
-		{
-			throw TestSkipped(
-				"Add<bool> is rejected at compile time by this header; "
-				"FLAG_AS_ARG cannot be reached through the visible API");
-		}
-	}
-
-	TEST(AddBoolReportsFlagAsArgWhenSupported)
-	{
-		SimulatedArgv args{};
-		Parser::ArgParser parser(args.argc(), args.argv());
-		CheckAddBoolProducesFlagAsArg(parser);
+		CHECK_FALSE(SupportsAddBool<Parser::ArgParser>);
 	}
 
 	// -----------------------------------------------------------------------------
@@ -1461,9 +1466,7 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& value = parser.Add<std::string>("--value");
-		value.Help("");
-
-		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_THROWS_AS(value.Help(""), std::logic_error);
 	}
 
 	TEST(EmptyFlagHelpIsSafe)
@@ -1471,9 +1474,7 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& verbose = parser.AddFlag("--verbose");
-		verbose.Help("");
-
-		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_THROWS_AS(verbose.Help(""),std::logic_error);
 	}
 
 	TEST(AttachedHelpLikeValueIsNotAHelpQuery)
@@ -1503,49 +1504,45 @@ namespace parser_tests
 	}
 
 	// -----------------------------------------------------------------------------
-	// Invalid parser configurations, reported by ValidateArgs(false)
+	// Invalid parser configurations, reported by exceptions
 	// -----------------------------------------------------------------------------
 
 	TEST(RequiredScalarCannotHaveDefault)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::int64_t>("--count").Required().Default(5);
-
-		CHECK_ERROR(parser, Error::REQUIRED_HAS_DEFAULT);
+		CHECK_THROWS_AS(parser.Add<std::int64_t>("--count").Required().Default(5), std::logic_error);
 	}
 
 	TEST(RequiredAggregateCannotHaveDefault)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items")
-			.Exactly(2)
-			.Required()
-			.Default({ 1, 2 });
-
-		CHECK_ERROR(parser, Error::REQUIRED_HAS_DEFAULT);
+		CHECK_THROWS_AS(
+			(parser.AddAggregate<std::int64_t>("--items")
+				.Exactly(2)
+				.Required()
+				.Default({ 1, 2 })),
+			std::logic_error);
 	}
 
 	TEST(ScalarDefaultCannotBeSetTwice)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::int64_t>("--count").Default(1).Default(2);
-
-		CHECK_ERROR(parser, Error::DEFAULT_ALREADY_SET);
+		CHECK_THROWS_AS(parser.Add<std::int64_t>("--count").Default(1).Default(2), std::logic_error);
 	}
 
 	TEST(AggregateDefaultCannotBeSetTwice)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items")
-			.Exactly(2)
-			.Default({ 1, 2 })
-			.Default({ 3, 4 });
-
-		CHECK_ERROR(parser, Error::DEFAULT_ALREADY_SET);
+		CHECK_THROWS_AS(
+			(parser.AddAggregate<std::int64_t>("--items")
+				.Exactly(2)
+				.Default({ 1, 2 })
+				.Default({ 3, 4 })),
+			std::logic_error);
 	}
 
 	TEST(RequiredPositionalCannotFollowOptionalPositional)
@@ -1555,7 +1552,7 @@ namespace parser_tests
 		parser.AddPositional<std::string>("optional").Default("default");
 		parser.AddPositional<std::string>("required").Required();
 
-		CHECK_ERROR(parser, Error::REQ_POS_AFTER_OPTIONAL);
+		CHECK_THROWS_AS(parser.ParseAndValidate(), std::logic_error);
 	}
 
 	TEST(DuplicateCanonicalName)
@@ -1563,9 +1560,7 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.Add<std::string>("--name");
-		parser.Add<std::int64_t>("--name");
-
-		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+		CHECK_THROWS_AS(parser.Add<std::int64_t>("--name"), std::logic_error);
 	}
 
 	TEST(AliasCollidesWithCanonicalName)
@@ -1573,9 +1568,7 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.Add<std::string>("--first", { "-f" });
-		parser.Add<std::string>("-f");
-
-		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+		CHECK_THROWS_AS(parser.Add<std::string>("-f"), std::logic_error);
 	}
 
 	TEST(AliasCollidesWithAnotherAlias)
@@ -1583,40 +1576,28 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.Add<std::string>("--first", { "-x" });
-		parser.Add<std::string>("--second", { "-x" });
-
-		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+		CHECK_THROWS_AS((parser.Add<std::string>("--second", { "-x" })), std::logic_error);
 	}
 
 	TEST(DuplicateAliasWithinOneRegistrationIsRejected)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::string>("--value", { "-v", "-v" });
-
-		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+		CHECK_THROWS_AS((parser.Add<std::string>("--value", { "-v", "-v" })), std::logic_error);
 	}
 
 	TEST(EmptyNamedArgumentIsRejected)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::string>("");
-
-		const Error error =
-			parser.ParseAndValidate();
-		CHECK(error != Error::SUCCESS);
+		CHECK_THROWS_AS(parser.Add<std::string>(""), std::logic_error);
 	}
 
 	TEST(BuiltInHelpNameIsReserved)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddFlag("--help");
-
-		const Error error =
-			parser.ParseAndValidate();
-		CHECK(error != Error::SUCCESS);
+		CHECK_THROWS_AS(parser.AddFlag("--help"), std::logic_error);
 	}
 
 	TEST(FlagNameCollidesWithArgumentName)
@@ -1624,9 +1605,7 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.AddFlag("--debug");
-		parser.Add<std::string>("--debug");
-
-		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+		CHECK_THROWS_AS(parser.Add<std::string>("--debug"), std::logic_error);
 	}
 
 	TEST(FlagAliasCollidesWithArgumentName)
@@ -1634,36 +1613,21 @@ namespace parser_tests
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.AddFlag("--flag", {"--debug"});
-		parser.Add<std::string>("--debug");
-
-		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
-	}
-
-	TEST(AggregateMustDeclareCardinality)
-	{
-		SimulatedArgv args{};
-		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items");
-
-		CHECK_ERROR(parser, Error::NO_CARDINALITY_SET);
+		CHECK_THROWS_AS(parser.Add<std::string>("--debug"), std::logic_error);
 	}
 
 	TEST(CardinalityAlreadySetError)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").Exactly(3).Unlimited();
-
-		CHECK_ERROR(parser, Error::CARDINALITY_ALREADY_SET);
+		CHECK_THROWS_AS(parser.AddAggregate<std::int64_t>("--items").Exactly(3).Unlimited(), std::logic_error);
 	}
 
 	TEST(MinimumGreaterThanMaximumIsCardinalityError)
 	{
 		SimulatedArgv args{};
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.AddAggregate<std::int64_t>("--items").Between(5, 4);
-
-		CHECK_ERROR(parser, Error::MIN_GREATER_MAX);
+		CHECK_THROWS_AS(parser.AddAggregate<std::int64_t>("--items").Between(5, 4), std::logic_error);
 	}
 
 	TEST(ValueOr)
