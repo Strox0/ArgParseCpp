@@ -47,6 +47,15 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 		return HandleError();
 	}
 
+	bool m_pos_req = true;
+	for (auto& arg : m_positionals)
+	{
+		if (m_pos_req && !arg->m_required)
+			m_pos_req = false;
+		else if (!m_pos_req && arg->m_required)
+			throw std::logic_error("A Required positional cannot be after an optional one");
+	}
+
 	size_t positionals_index = 0;
 	bool options_end = false;
 	for (auto curr = m_tokens.begin(); curr < m_tokens.end(); curr++)
@@ -176,17 +185,8 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 		}
 	}
 
-	bool m_pos_req = true;
 	for (auto& arg : m_positionals)
 	{
-		if (m_pos_req && !arg->m_required)
-			m_pos_req = false;
-		else if (!m_pos_req && arg->m_required)
-		{
-			throw std::logic_error("A Required positional cannot be after an optional one");
-			return HandleError();
-		}
-
 		arg->Finalize();
 		m_error = arg->GetError();
 		if (m_error != Parser::Error::SUCCESS)
