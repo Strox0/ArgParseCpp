@@ -1453,12 +1453,7 @@ namespace parser_tests
 	{
 		SimulatedArgv args{ "--help" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Help("");
-
-		ScopedStreamCapture stdout_capture(std::cout);
-		const Error error =
-			parser.ParseAndValidate();
-		CHECK_EQ(error, Error::HELP_QUERY);
+		CHECK_THROWS_AS(parser.Help(""), std::logic_error);
 	}
 
 	TEST(EmptyScalarHelpIsSafe)
