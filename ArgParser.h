@@ -12,6 +12,7 @@
 #include <concepts>
 #include <utility>
 #include <unordered_map>
+#include <stdexcept>
 
 namespace Parser
 {
@@ -26,7 +27,6 @@ namespace Parser
 		TRANSFORMATION_ERROR,
 		MISSING_VALUE,
 		UNKNOWN_VALUE,
-		NO_CARDINALITY_SET,
 		HELP_QUERY,
 		CARDINALITY_VALIDATION_FAIL,
 		FLAG_HAS_EQUALS_VALUE,
@@ -207,7 +207,6 @@ namespace Parser
 			EXACTLY,
 			ATLEAST,
 			ATMOST,
-			UNSET,
 		};
 
 		Error ApplyCardinality();
@@ -231,7 +230,8 @@ namespace Parser
 		size_t m_exact_count = 0;
 		size_t m_min_count = 0;
 		size_t m_max_count = 0;
-		Cardinality m_card = Cardinality::UNSET;
+		Cardinality m_card = Cardinality::UNLIMITED;
+		bool m_card_set = false;
 	};
 
 	class ArgParser
@@ -257,7 +257,7 @@ namespace Parser
 
 	private:
 		Error HandleError();
-		Error CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al);
+		void CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al);
 		bool IsKnownName(const std::string& name);
 		bool ResolveName(std::string& name);
 		std::pair<std::string,std::string> ParseTokenWithEquals(const std::string& token, bool& has_value);
@@ -267,7 +267,6 @@ namespace Parser
 		enum class ArgType
 		{
 			Scalar,
-			Positional,
 			Aggregate,
 			Flag
 		};
@@ -284,7 +283,7 @@ namespace Parser
 	template<typename T>
 	inline Argument<T>& ArgParser::Add(const std::string& name, const std::vector<std::string>& aliases)
 	{
-		m_error = CheckAndRegisterNames(name, aliases);
+		CheckAndRegisterNames(name, aliases);
 		m_args.emplace_back(std::make_shared<Argument<T>>());
 		if (m_error == Error::SUCCESS)
 		{
@@ -306,7 +305,7 @@ namespace Parser
 	template<typename T>
 	inline Aggregate<T>& ArgParser::AddAggregate(const std::string& name, const std::vector<std::string>& aliases)
 	{
-		m_error = CheckAndRegisterNames(name, aliases);
+		CheckAndRegisterNames(name, aliases);
 		m_args.emplace_back(std::make_shared<Aggregate<T>>());
 		if (m_error == Error::SUCCESS)
 		{
@@ -343,7 +342,7 @@ namespace Parser
 	inline T Argument<T>::Value() const
 	{
 		if (!m_locked || m_error != Error::SUCCESS)
-			throw std::logic_error("Value called in an invalid sate");
+			throw std::logic_error("Value called in an invalid state");
 
 		return m_parsed_val;
 	}
@@ -352,7 +351,7 @@ namespace Parser
 	inline const T& Argument<T>::ValueRef() const
 	{
 		if (!m_locked || m_error != Error::SUCCESS)
-			throw std::logic_error("ValueRef called in an invalid sate");
+			throw std::logic_error("ValueRef called in an invalid state");
 
 		return m_parsed_val;
 	}
@@ -361,7 +360,7 @@ namespace Parser
 	inline T Argument<T>::ValueOr(const T& backup_val) const
 	{
 		if (!m_locked)
-			throw std::logic_error("ValueOr called before ParseAndValidateArgs");
+			throw std::logic_error("ValueOr called before ParseAndValidate");
 
 		if (m_set && m_error == Error::SUCCESS)
 			return m_parsed_val;
@@ -375,7 +374,7 @@ namespace Parser
 	inline Argument<T>& Argument<T>::Required()
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		if (m_has_default)
 		{
@@ -395,7 +394,7 @@ namespace Parser
 	inline Argument<T>& Argument<T>::Default(const T& default_value)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		if (m_required)
 		{
@@ -421,7 +420,7 @@ namespace Parser
 	inline Argument<T>& Parser::Argument<T>::ValidateText(Validation&& val)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_text_vals.emplace_back(std::forward<Validation>(val));
 		return *this;
@@ -434,7 +433,7 @@ namespace Parser
 		inline Argument<T>& Parser::Argument<T>::ValidateValue(Validation&& val)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_val_vals.emplace_back(std::forward<Validation>(val));
 		return *this;
@@ -447,7 +446,7 @@ namespace Parser
 	inline Argument<T>& Parser::Argument<T>::Transform(Transformation&& trans)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_text_trans.emplace_back(std::forward<Transformation>(trans));
 		return *this;
@@ -456,8 +455,11 @@ namespace Parser
 	template<Parseable T>
 	inline Argument<T>& Argument<T>::Help(std::string_view help_msg)
 	{
-		if (m_locked || help_msg.empty())
-			return *this;
+		if (m_locked)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+
+		if (help_msg.empty())
+			throw std::logic_error("Help message cannot be empty");
 
 		m_help = help_msg;
 		if (m_help.back() != '\n')
@@ -564,7 +566,7 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::Default(const std::vector<T>& default_value)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		if (m_required)
 		{
@@ -586,12 +588,8 @@ namespace Parser
 	template<Parseable T>
 	inline Aggregate<T>& Aggregate<T>::Unlimited()
 	{
-		if (m_locked)
-			return *this;
-		if (m_card != Cardinality::UNSET)
+		if (m_card_set)
 			throw std::logic_error("Cardinality already configured");
-		else
-			m_card = Cardinality::UNLIMITED;
 		return *this;
 	}
 
@@ -620,7 +618,7 @@ namespace Parser
 	inline const std::vector<T>& Aggregate<T>::ValueRef() const
 	{
 		if (!m_locked || m_error != Error::SUCCESS)
-			throw std::logic_error("ValueRef called in an invalid sate");
+			throw std::logic_error("ValueRef called in an invalid state");
 
 		return m_parsed_vals;
 	}
@@ -629,7 +627,7 @@ namespace Parser
 	inline std::vector<T> Aggregate<T>::ValueOr(const std::vector<T>& backup_val) const
 	{
 		if (!m_locked)
-			throw std::logic_error("ValueOr cannot be called before ParseAndValidateArgs");
+			throw std::logic_error("ValueOr cannot be called before ParseAndValidate");
 
 		if (m_set && m_error == Error::SUCCESS)
 			return m_parsed_vals;
@@ -643,7 +641,7 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::Required()
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		if (m_has_default)
 			throw std::logic_error("An argument cannot be set as Required while having a default value");
@@ -660,8 +658,11 @@ namespace Parser
 	template<Parseable T>
 	inline Aggregate<T>& Aggregate<T>::Help(std::string_view help_msg)
 	{
-		if (m_locked || help_msg.empty())
-			return *this;
+		if (m_locked)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+
+		if (help_msg.empty())
+			throw std::logic_error("Help message cannot be empty");
 
 		m_help = help_msg;
 		if (m_help.back() != '\n')
@@ -673,8 +674,8 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::Exactly(size_t count)
 	{
 		if (m_locked)
-			return *this;
-		if (m_card != Cardinality::UNSET)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+		if (m_card_set)
 			throw std::logic_error("Cardinality already configured");
 		else if (count == 0)
 			throw std::logic_error("Exact count cannot be 0");
@@ -682,6 +683,7 @@ namespace Parser
 		{
 			m_card = Cardinality::EXACTLY;
 			m_exact_count = count;
+			m_card_set = true;
 		}
 		return *this;
 	}
@@ -690,8 +692,8 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::Between(size_t min, size_t max)
 	{
 		if (m_locked)
-			return *this;
-		if (m_card != Cardinality::UNSET)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+		if (m_card_set)
 			throw std::logic_error("Cardinality already configured");
 		else if (min == 0 || max == 0)
 			throw std::logic_error("Count cannot be 0");
@@ -702,6 +704,7 @@ namespace Parser
 			m_card = Cardinality::BETWEEN;
 			m_min_count = min;
 			m_max_count = max;
+			m_card_set = true;
 		}
 		return *this;
 	}
@@ -710,8 +713,8 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::AtLeast(size_t count)
 	{
 		if (m_locked)
-			return *this;
-		if (m_card != Cardinality::UNSET)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+		if (m_card_set)
 			throw std::logic_error("Cardinality already configured");
 		else if (count == 0)
 			throw std::logic_error("Count cannot be 0");
@@ -719,6 +722,7 @@ namespace Parser
 		{
 			m_card = Cardinality::ATLEAST;
 			m_min_count = count;
+			m_card_set = true;
 		}
 		return *this;
 	}
@@ -727,8 +731,8 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::AtMost(size_t count)
 	{
 		if (m_locked)
-			return *this;
-		if (m_card != Cardinality::UNSET)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+		if (m_card_set)
 			throw std::logic_error("Cardinality already configured");
 		else if (count == 0)
 			throw std::logic_error("Count cannot be 0");
@@ -736,6 +740,7 @@ namespace Parser
 		{
 			m_card = Cardinality::ATMOST;
 			m_max_count = count;
+			m_card_set = true;
 		}
 		return *this;
 	}
@@ -747,9 +752,6 @@ namespace Parser
 			return;
 
 		m_locked = true;
-
-		if (m_card == Cardinality::UNSET)
-			throw std::logic_error("A cardinality must be configured");
 
 		if (m_set)
 		{
@@ -836,9 +838,6 @@ namespace Parser
 	{
 		switch (m_card)
 		{
-		case Parser::Aggregate<T>::Cardinality::UNSET:
-			throw std::logic_error("A cardinality must be configured");
-			break;
 		case Parser::Aggregate<T>::Cardinality::BETWEEN:
 			if (m_parsed_vals.size() < m_min_count || m_parsed_vals.size() > m_max_count)
 				return Error::CARDINALITY_VALIDATION_FAIL;
@@ -867,7 +866,7 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::ValidateText(Validation&& val)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_text_vals.emplace_back(std::forward<Validation>(val));
 		return *this;
@@ -880,7 +879,7 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::ValidateValue(Validation&& val)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_val_vals.emplace_back(std::forward<Validation>(val));
 		return *this;
@@ -893,7 +892,7 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::Transform(Transformation&& trans)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_text_trans.emplace_back(std::forward<Transformation>(trans));
 		return *this;
@@ -906,7 +905,7 @@ namespace Parser
 	inline Aggregate<T>& Aggregate<T>::ValidateCollection(Validation&& val)
 	{
 		if (m_locked)
-			return *this;
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_col_vals.emplace_back(std::forward<Validation>(val));
 		return *this;

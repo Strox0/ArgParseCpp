@@ -19,7 +19,7 @@ Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUC
 
 Parser::Flag& Parser::ArgParser::AddFlag(const std::string& name, const std::vector<std::string>& aliases)
 {
-	m_error = CheckAndRegisterNames(name, aliases);
+	CheckAndRegisterNames(name, aliases);
 	m_args.emplace_back(std::make_unique<Flag>());
 	if (m_error == Error::SUCCESS)
 	{
@@ -214,7 +214,7 @@ Parser::Error Parser::ArgParser::HandleError()
 	return m_error;
 }
 
-Parser::Error Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al)
+void Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al)
 {
 	if (name.empty())
 		throw std::logic_error("Missing argument name");
@@ -249,8 +249,6 @@ Parser::Error Parser::ArgParser::CheckAndRegisterNames(const std::string& name, 
 			m_alias_map[n] = name;
 		}
 	}
-
-	return Error::SUCCESS;
 }
 
 bool Parser::ArgParser::IsKnownName(const std::string& name)
@@ -336,8 +334,11 @@ bool Parser::Flag::Value() const
 
 Parser::Flag& Parser::Flag::Help(std::string_view help_msg)
 {
-	if (m_locked || help_msg.empty())
-		return *this;
+	if (m_locked)
+		throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+
+	if (help_msg.empty())
+		throw std::logic_error("Help message cannot be empty");
 
 	m_help = help_msg;
 	if (m_help.back() != '\n')
