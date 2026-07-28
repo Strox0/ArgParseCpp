@@ -98,7 +98,7 @@ namespace parser_tests
 	} while (false)
 
 #define CHECK_ERROR(parser_expression, expected_error)                           \
-	CHECK_EQ((parser_expression).ParseAndValidate(Parser::ErrorPolicy::Return), (expected_error))
+	CHECK_EQ((parser_expression).ParseAndValidate(), (expected_error))
 
 	class SimulatedArgv
 	{
@@ -112,7 +112,7 @@ namespace parser_tests
 		//   { "--count 17" }         -> "--count", "17"
 		//   { "--count", "17" }     -> "--count", "17"
 		//   { R"(--name "two words")" } -> "--name", "two words"
-		//   { "--count=17" }         -> "--count=17" (one unsupported token)
+		//   { "--count=17" }         -> "--count=17" (one argv token)
 		SimulatedArgv(std::initializer_list<std::string_view> command_line_fragments)
 		{
 			std::string command_line;
@@ -224,6 +224,33 @@ namespace parser_tests
 
 		std::vector<std::string> m_storage;
 		std::vector<char*> m_pointers;
+	};
+
+	class ScopedStreamCapture
+	{
+	public:
+		explicit ScopedStreamCapture(std::ostream& stream)
+			: m_stream(stream), m_original_buffer(stream.rdbuf(m_capture.rdbuf()))
+		{
+		}
+
+		ScopedStreamCapture(const ScopedStreamCapture&) = delete;
+		ScopedStreamCapture& operator=(const ScopedStreamCapture&) = delete;
+
+		~ScopedStreamCapture()
+		{
+			m_stream.rdbuf(m_original_buffer);
+		}
+
+		std::string str() const
+		{
+			return m_capture.str();
+		}
+
+	private:
+		std::ostream& m_stream;
+		std::streambuf* m_original_buffer;
+		std::ostringstream m_capture;
 	};
 
 	using TestFunction = void (*)();
@@ -416,6 +443,19 @@ namespace parser_tests
 		CHECK_EQ(value, std::string());
 	}
 
+	struct VoidParseResult
+	{
+	};
+
+	void Parse(std::string_view, VoidParseResult&)
+	{
+	}
+
+	TEST(ParseableRequiresBooleanLikeParseResult)
+	{
+		CHECK_FALSE(Parser::Parseable<VoidParseResult>);
+	}
+
 	// -----------------------------------------------------------------------------
 	// Scalar named arguments
 	// -----------------------------------------------------------------------------
@@ -431,15 +471,15 @@ namespace parser_tests
 		CHECK_EQ(count.Value(), std::int64_t{ 17 });
 	}
 
-	TEST(NamedArgumentEqualsSyntaxIsUnknownValue)
+	TEST(NamedArgumentEqualsSyntaxSucceeds)
 	{
 		SimulatedArgv args{ "--count=17" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& c = parser.Add<std::int64_t>("--count");
+		auto& count = parser.Add<std::int64_t>("--count");
 
 		CHECK_ERROR(parser, Error::SUCCESS);
-		CHECK(c.Provided());
-		CHECK_EQ(c.Value(), std::int64_t{ 17 });
+		CHECK(count.Provided());
+		CHECK_EQ(count.Value(), std::int64_t{ 17 });
 	}
 
 	TEST(NamedArgumentCommandLineStringIsSplitOnWhitespace)
@@ -475,11 +515,11 @@ namespace parser_tests
 		CHECK_EQ(count.Value(), std::int64_t{ 21 });
 	}
 
-	TEST(NamedStringEqualsSyntaxMissingValue)
+	TEST(NamedStringEqualsSyntaxPreservesEmptyValue)
 	{
 		SimulatedArgv args{ "--name=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::string>("--name");
+		auto& name = parser.Add<std::string>("--name");
 
 		CHECK_ERROR(parser, Error::MISSING_VALUE);
 	}
@@ -554,11 +594,20 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::PARSE_FAIL);
 	}
 
-	TEST(EmptyNumericRequiredEqualsSyntaxMissingValue)
+	TEST(EmptyNumericRequiredEqualsSyntaxIsParseFailure)
 	{
 		SimulatedArgv args{ "--count=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.Add<std::int64_t>("--count").Required();
+
+		CHECK_ERROR(parser, Error::MISSING_VALUE);
+	}
+
+	TEST(OptionTerminatorIsNotConsumedAsScalarValue)
+	{
+		SimulatedArgv args{ "--count", "--", "tail" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count");
 
 		CHECK_ERROR(parser, Error::MISSING_VALUE);
 	}
@@ -580,6 +629,21 @@ namespace parser_tests
 		Parser::ArgParser parser(args.argc(), args.argv());
 
 		CHECK_ERROR(parser, Error::UNKNOWN_VALUE);
+	}
+
+	TEST(ReturnPolicyDoesNotWriteErrorsToStdout)
+	{
+		SimulatedArgv args{ "--count", "invalid" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count");
+
+		ScopedStreamCapture stdout_capture(std::cout);
+		const Error error =
+			parser.ParseAndValidate();
+		const std::string output = stdout_capture.str();
+
+		CHECK_EQ(error, Error::PARSE_FAIL);
+		CHECK(output.empty());
 	}
 
 	TEST(ExtraBareTokenIsUnknown)
@@ -801,6 +865,44 @@ namespace parser_tests
 		CHECK_FALSE(quiet.Value());
 	}
 
+	TEST(FlagAfterDoubleDashRemainsPositional)
+	{
+		SimulatedArgv args{ "--", "--debug" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& debug = parser.AddFlag("--debug");
+		auto& value = parser.AddPositional<std::string>("value").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(debug.Value());
+		CHECK_EQ(value.Value(), std::string("--debug"));
+	}
+
+	TEST(AttachedScalarValueMatchingFlagNameIsNotStolen)
+	{
+		SimulatedArgv args{ "--output=--verbose" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& verbose = parser.AddFlag("--verbose");
+		auto& output = parser.Add<std::string>("--output");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(verbose.Value());
+		CHECK_EQ(output.Value(), std::string("--verbose"));
+	}
+
+	TEST(AbsentFlagDoesNotConsumeEmptyArgument)
+	{
+		SimulatedArgv args{ R"("" tail)" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& verbose = parser.AddFlag("--verbose");
+		auto& first = parser.AddPositional<std::string>("first").Required();
+		auto& second = parser.AddPositional<std::string>("second").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_FALSE(verbose.Value());
+		CHECK_EQ(first.Value(), std::string());
+		CHECK_EQ(second.Value(), std::string("tail"));
+	}
+
 	template <typename P>
 	concept SupportsAddBool = requires(P & parser)
 	{
@@ -944,6 +1046,16 @@ namespace parser_tests
 		CHECK_EQ(text.Value(), std::string("hello"));
 	}
 
+	TEST(PositionalContainingEqualsRemainsOneToken)
+	{
+		SimulatedArgv args{ "key=value" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.AddPositional<std::string>("value").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(value.Value(), std::string("key=value"));
+	}
+
 	TEST(ExtraPositionalTokenIsUnknown)
 	{
 		SimulatedArgv args{ "first", "extra" };
@@ -1004,6 +1116,20 @@ namespace parser_tests
 		CHECK_EQ(items.Value(), std::vector<std::int64_t>({ 1, 2, 3 }));
 		CHECK_NEAR(scale.Value(), 2.5, 0.000001);
 		CHECK(debug.Value());
+	}
+
+	TEST(RemovingLaterScalarDoesNotExtendAggregate)
+	{
+		SimulatedArgv args{ "--items", "one", "--mode", "fast", "tail" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& items = parser.AddAggregate<std::string>("--items").Exactly(1);
+		auto& mode = parser.Add<std::string>("--mode").Required();
+		auto& tail = parser.AddPositional<std::string>("tail").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(items.Value(), std::vector<std::string>({ "one" }));
+		CHECK_EQ(mode.Value(), std::string("fast"));
+		CHECK_EQ(tail.Value(), std::string("tail"));
 	}
 
 	TEST(AggregateAcceptsNegativeNumbers)
@@ -1259,7 +1385,13 @@ namespace parser_tests
 		Parser::ArgParser parser(args.argc(), args.argv());
 		parser.Help("Application help.");
 
-		CHECK_ERROR(parser, Error::HELP_QUERY);
+		ScopedStreamCapture stdout_capture(std::cout);
+		const Error error =
+			parser.ParseAndValidate();
+		const std::string output = stdout_capture.str();
+
+		CHECK_EQ(error, Error::HELP_QUERY);
+		CHECK(output.find("Arg Error:") == std::string::npos);
 	}
 
 	TEST(ShortHelpReturnsHelpQuery)
@@ -1278,6 +1410,96 @@ namespace parser_tests
 		parser.Add<std::string>("--required").Required();
 
 		CHECK_ERROR(parser, Error::HELP_QUERY);
+	}
+
+	TEST(HelpListsEveryArgumentKind)
+	{
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Help("Overview.");
+		parser.Add<std::string>("--output", { "-O_ALIAS" })
+			.Help("Scalar documentation.");
+		parser.AddPositional<std::string>("INPUT").Help("Positional documentation.");
+		parser.AddAggregate<std::string>("--items")
+			.Unlimited()
+			.Help("Aggregate documentation.");
+		parser.AddFlag("--verbose", { "-V_ALIAS" }).Help("Flag documentation.");
+
+		ScopedStreamCapture stdout_capture(std::cout);
+		const Error error =
+			parser.ParseAndValidate();
+		const std::string output = stdout_capture.str();
+
+		CHECK_EQ(error, Error::HELP_QUERY);
+		CHECK(output.find("Overview.") != std::string::npos);
+		CHECK(output.find("--output") != std::string::npos);
+		CHECK(output.find("-O_ALIAS") != std::string::npos);
+		CHECK(output.find("Scalar documentation.") != std::string::npos);
+		CHECK(output.find("INPUT") != std::string::npos);
+		CHECK(output.find("Positional documentation.") != std::string::npos);
+		CHECK(output.find("--items") != std::string::npos);
+		CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
+		CHECK(output.find("--verbose") != std::string::npos);
+		CHECK(output.find("-V_ALIAS") != std::string::npos);
+		CHECK(output.find("Flag documentation.") != std::string::npos);
+	}
+
+	TEST(EmptyProgramHelpIsSafe)
+	{
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Help("");
+
+		ScopedStreamCapture stdout_capture(std::cout);
+		const Error error =
+			parser.ParseAndValidate();
+		CHECK_EQ(error, Error::HELP_QUERY);
+	}
+
+	TEST(EmptyScalarHelpIsSafe)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.Add<std::string>("--value");
+		value.Help("");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+	}
+
+	TEST(EmptyFlagHelpIsSafe)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& verbose = parser.AddFlag("--verbose");
+		verbose.Help("");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+	}
+
+	TEST(AttachedHelpLikeValueIsNotAHelpQuery)
+	{
+		SimulatedArgv args{ "--label=--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& label = parser.Add<std::string>("--label");
+
+		ScopedStreamCapture stdout_capture(std::cout);
+		const Error error =
+			parser.ParseAndValidate();
+		CHECK_EQ(error, Error::SUCCESS);
+		CHECK_EQ(label.Value(), std::string("--help"));
+	}
+
+	TEST(HelpTokenAfterDoubleDashRemainsPositional)
+	{
+		SimulatedArgv args{ "--", "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.AddPositional<std::string>("value").Required();
+
+		ScopedStreamCapture stdout_capture(std::cout);
+		const Error error =
+			parser.ParseAndValidate();
+		CHECK_EQ(error, Error::SUCCESS);
+		CHECK_EQ(value.Value(), std::string("--help"));
 	}
 
 	// -----------------------------------------------------------------------------
@@ -1366,6 +1588,37 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
 	}
 
+	TEST(DuplicateAliasWithinOneRegistrationIsRejected)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--value", { "-v", "-v" });
+
+		CHECK_ERROR(parser, Error::NAME_ALREADY_USED);
+	}
+
+	TEST(EmptyNamedArgumentIsRejected)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("");
+
+		const Error error =
+			parser.ParseAndValidate();
+		CHECK(error != Error::SUCCESS);
+	}
+
+	TEST(BuiltInHelpNameIsReserved)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddFlag("--help");
+
+		const Error error =
+			parser.ParseAndValidate();
+		CHECK(error != Error::SUCCESS);
+	}
+
 	TEST(FlagNameCollidesWithArgumentName)
 	{
 		SimulatedArgv args{};
@@ -1425,6 +1678,54 @@ namespace parser_tests
 		CHECK_EQ(f.ValueOr(7.8), 9.7);
 	}
 
+	TEST(ScalarValueOrUsesConfiguredDefault)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.Add<std::int64_t>("--value").Default(17);
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(value.ValueOr(99), std::int64_t{ 17 });
+	}
+
+	TEST(AggregateValueOrUsesConfiguredDefault)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& values = parser.AddAggregate<std::int64_t>("--values")
+			.Exactly(2)
+			.Default({ 7, 8 });
+
+		const std::vector<std::int64_t> backup{ 99, 100 };
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(values.ValueOr(backup), std::vector<std::int64_t>({ 7, 8 }));
+	}
+
+	TEST(ValueOrUsesBackupAfterParseFailure)
+	{
+		SimulatedArgv args{ "--value", "invalid" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.Add<std::int64_t>("--value");
+
+		const Error error =
+			parser.ParseAndValidate();
+		CHECK_EQ(error, Error::PARSE_FAIL);
+		CHECK_EQ(value.ValueOr(42), std::int64_t{ 42 });
+	}
+
+	template <typename T>
+	concept ConstAggregateValueOr = Parser::Parseable<T> && requires(
+		const Parser::Aggregate<T>& values, const std::vector<T>& backup)
+	{
+		values.ValueOr(backup);
+	};
+
+	TEST(AggregateValueOrCanBeCalledOnConstObject)
+	{
+		CHECK(ConstAggregateValueOr<std::int64_t>);
+	}
+
 	TEST(MissingValueForArgument)
 	{
 		SimulatedArgv args{ "--count", "--float", "9.7" };
@@ -1458,6 +1759,16 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK_EQ(p.Value(), "--count");
 		CHECK_EQ(p2.Value(), 9.7);
+	}
+
+	TEST(EqualsAfterDoubleDashRemainsOnePositionalToken)
+	{
+		SimulatedArgv args{ "--", "key=value" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.AddPositional<std::string>("value").Required();
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(value.Value(), std::string("key=value"));
 	}
 
 	TEST(NothingAfterDoubleDash)
