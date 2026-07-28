@@ -67,19 +67,20 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 
 			bool has_value = false;
 			std::pair<std::string, std::string> pair = ParseTokenWithEquals(token, has_value);
-			if (has_value && pair.second.empty())
-			{
-				m_error = Error::MISSING_VALUE;
-				return HandleError();
-			}
 
-			if (IsKnownName(pair.first))
+			if (ResolveName(pair.first))
 			{
 				ArgumentBase& arg = *m_name_arg_map.at(pair.first).second;
 				switch (m_name_arg_map.at(pair.first).first)
 				{
 				case Parser::ArgParser::ArgType::Scalar:
 				{
+					if (has_value && pair.second.empty())
+					{
+						m_error = Error::MISSING_VALUE;
+						return HandleError();
+					}
+
 					if (has_value)
 					{
 						arg.AddValue(pair.second);
@@ -107,6 +108,12 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 				}
 				case Parser::ArgParser::ArgType::Aggregate:
 				{
+					if (has_value && pair.second.empty())
+					{
+						m_error = Error::MISSING_VALUE;
+						return HandleError();
+					}
+
 					bool found_value = has_value;
 					if (has_value)
 					{
@@ -176,7 +183,7 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 			m_pos_req = false;
 		else if (!m_pos_req && arg->m_required)
 		{
-			m_error = Error::REQ_POS_AFTER_OPTIONAL;
+			throw std::logic_error("A Required positional cannot be after an optional one");
 			return HandleError();
 		}
 
@@ -210,10 +217,13 @@ Parser::Error Parser::ArgParser::HandleError()
 Parser::Error Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al)
 {
 	if (name.empty())
-		return Error::MISSING_NAME;
+		throw std::logic_error("Missing argument name");
 
 	if (m_name_arg_map.contains(name) || name == "--help" || name == "-h" || name == "--" || m_alias_map.contains(name))
-		return Error::NAME_ALREADY_USED;
+		throw std::logic_error("Argument name already used");
+
+	if (name.find('=') != name.npos)
+		throw std::logic_error("Name contains '='");
 
 	if (!al.empty())
 	{
@@ -225,7 +235,11 @@ Parser::Error Parser::ArgParser::CheckAndRegisterNames(const std::string& name, 
 		for (const auto& n : al)
 		{
 			if (tmp.contains(n) || m_name_arg_map.contains(n) || m_alias_map.contains(n))
-				return Error::NAME_ALREADY_USED;
+				throw std::logic_error("Argument alias already used");
+			else if (n.empty())
+				throw std::logic_error("Alias is an empty string");
+			else if (n.find('=') != n.npos)
+				throw std::logic_error("Alias contains '='");
 			else
 				tmp.insert(n);
 		}
@@ -252,7 +266,7 @@ bool Parser::ArgParser::IsKnownName(const std::string& name)
 	}
 }
 
-bool Parser::ArgParser::IsKnownName(std::string& name)
+bool Parser::ArgParser::ResolveName(std::string& name)
 {
 	if (m_alias_map.contains(name))
 		name = m_alias_map[name];
@@ -271,7 +285,7 @@ std::pair<std::string, std::string> Parser::ArgParser::ParseTokenWithEquals(cons
 	else
 	{
 		has_value = false;
-		return { token,token };
+		return { token,std::string() };
 	}
 }
 

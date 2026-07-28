@@ -20,22 +20,14 @@ namespace Parser
 		SUCCESS,
 		PARSE_FAIL,
 		MISSING_REQUIRED,
-		REQUIRED_HAS_DEFAULT,
 		TEXT_VALIDATION_INVALID,
 		VAL_VALIDATION_INVALID,
 		COL_VALIDATION_INVALID,
 		TRANSFORMATION_ERROR,
 		MISSING_VALUE,
 		UNKNOWN_VALUE,
-		DEFAULT_ALREADY_SET,
-		REQ_POS_AFTER_OPTIONAL,
-		MIN_GREATER_MAX,
-		CARDINALITY_ALREADY_SET,
-		COUNT_ZERO,
 		NO_CARDINALITY_SET,
 		HELP_QUERY,
-		NAME_ALREADY_USED,
-		MISSING_NAME,
 		CARDINALITY_VALIDATION_FAIL,
 		FLAG_HAS_EQUALS_VALUE,
 	};
@@ -267,7 +259,7 @@ namespace Parser
 		Error HandleError();
 		Error CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al);
 		bool IsKnownName(const std::string& name);
-		bool IsKnownName(std::string& name);
+		bool ResolveName(std::string& name);
 		std::pair<std::string,std::string> ParseTokenWithEquals(const std::string& token, bool& has_value);
 
 	private:
@@ -351,7 +343,7 @@ namespace Parser
 	inline T Argument<T>::Value() const
 	{
 		if (!m_locked || m_error != Error::SUCCESS)
-			return T{};
+			throw std::logic_error("Value called in an invalid sate");
 
 		return m_parsed_val;
 	}
@@ -360,7 +352,7 @@ namespace Parser
 	inline const T& Argument<T>::ValueRef() const
 	{
 		if (!m_locked || m_error != Error::SUCCESS)
-			return T{};
+			throw std::logic_error("ValueRef called in an invalid sate");
 
 		return m_parsed_val;
 	}
@@ -369,7 +361,7 @@ namespace Parser
 	inline T Argument<T>::ValueOr(const T& backup_val) const
 	{
 		if (!m_locked)
-			return T{};
+			throw std::logic_error("ValueOr called before ParseAndValidateArgs");
 
 		if (m_set && m_error == Error::SUCCESS)
 			return m_parsed_val;
@@ -387,7 +379,7 @@ namespace Parser
 
 		if (m_has_default)
 		{
-			m_error = Error::REQUIRED_HAS_DEFAULT;
+			throw std::logic_error("An argument cannot be set as Required while having a default value");
 		}
 		else
 		{
@@ -407,11 +399,11 @@ namespace Parser
 
 		if (m_required)
 		{
-			m_error = Error::REQUIRED_HAS_DEFAULT;
+			throw std::logic_error("An argument cannot have a default value while marked as Required");
 		}
 		else if (m_has_default)
 		{
-			m_error = Error::DEFAULT_ALREADY_SET;
+			throw std::logic_error("Default value already set");
 		}
 		else
 		{
@@ -576,11 +568,11 @@ namespace Parser
 
 		if (m_required)
 		{
-			m_error = Error::REQUIRED_HAS_DEFAULT;
+			throw std::logic_error("An argument cannot have a default value while marked as Required");
 		}
 		else if (m_has_default)
 		{
-			m_error = Error::DEFAULT_ALREADY_SET;
+			throw std::logic_error("Default value already set");
 		}
 		else
 		{
@@ -597,7 +589,7 @@ namespace Parser
 		if (m_locked)
 			return *this;
 		if (m_card != Cardinality::UNSET)
-			m_error = Error::CARDINALITY_ALREADY_SET;
+			throw std::logic_error("Cardinality already configured");
 		else
 			m_card = Cardinality::UNLIMITED;
 		return *this;
@@ -619,7 +611,7 @@ namespace Parser
 	inline std::vector<T> Aggregate<T>::Value() const
 	{
 		if (!m_locked || m_error != Error::SUCCESS)
-			return std::vector<T>{};
+			throw std::logic_error("Value called in an invalid state");
 
 		return m_parsed_vals;
 	}
@@ -628,7 +620,7 @@ namespace Parser
 	inline const std::vector<T>& Aggregate<T>::ValueRef() const
 	{
 		if (!m_locked || m_error != Error::SUCCESS)
-			return std::vector<T>{};
+			throw std::logic_error("ValueRef called in an invalid sate");
 
 		return m_parsed_vals;
 	}
@@ -637,7 +629,7 @@ namespace Parser
 	inline std::vector<T> Aggregate<T>::ValueOr(const std::vector<T>& backup_val) const
 	{
 		if (!m_locked)
-			return std::vector<T>{};
+			throw std::logic_error("ValueOr cannot be called before ParseAndValidateArgs");
 
 		if (m_set && m_error == Error::SUCCESS)
 			return m_parsed_vals;
@@ -654,7 +646,7 @@ namespace Parser
 			return *this;
 
 		if (m_has_default)
-			m_error = Error::REQUIRED_HAS_DEFAULT;
+			throw std::logic_error("An argument cannot be set as Required while having a default value");
 		else
 		{
 			m_required = true;
@@ -683,9 +675,9 @@ namespace Parser
 		if (m_locked)
 			return *this;
 		if (m_card != Cardinality::UNSET)
-			m_error = Error::CARDINALITY_ALREADY_SET;
+			throw std::logic_error("Cardinality already configured");
 		else if (count == 0)
-			m_error = Error::COUNT_ZERO;
+			throw std::logic_error("Exact count cannot be 0");
 		else
 		{
 			m_card = Cardinality::EXACTLY;
@@ -700,11 +692,11 @@ namespace Parser
 		if (m_locked)
 			return *this;
 		if (m_card != Cardinality::UNSET)
-			m_error = Error::CARDINALITY_ALREADY_SET;
+			throw std::logic_error("Cardinality already configured");
 		else if (min == 0 || max == 0)
-			m_error = Error::COUNT_ZERO;
+			throw std::logic_error("Count cannot be 0");
 		else if (max < min)
-			m_error = Error::MIN_GREATER_MAX;
+			throw std::logic_error("Minimum count cannot be greater than maximum count");
 		else
 		{
 			m_card = Cardinality::BETWEEN;
@@ -720,9 +712,9 @@ namespace Parser
 		if (m_locked)
 			return *this;
 		if (m_card != Cardinality::UNSET)
-			m_error = Error::CARDINALITY_ALREADY_SET;
+			throw std::logic_error("Cardinality already configured");
 		else if (count == 0)
-			m_error = Error::COUNT_ZERO;
+			throw std::logic_error("Count cannot be 0");
 		else
 		{
 			m_card = Cardinality::ATLEAST;
@@ -737,9 +729,9 @@ namespace Parser
 		if (m_locked)
 			return *this;
 		if (m_card != Cardinality::UNSET)
-			m_error = Error::CARDINALITY_ALREADY_SET;
+			throw std::logic_error("Cardinality already configured");
 		else if (count == 0)
-			m_error = Error::COUNT_ZERO;
+			throw std::logic_error("Count cannot be 0");
 		else
 		{
 			m_card = Cardinality::ATMOST;
@@ -757,10 +749,7 @@ namespace Parser
 		m_locked = true;
 
 		if (m_card == Cardinality::UNSET)
-		{
-			m_error = Error::NO_CARDINALITY_SET;
-			return;
-		}
+			throw std::logic_error("A cardinality must be configured");
 
 		if (m_set)
 		{
@@ -848,7 +837,7 @@ namespace Parser
 		switch (m_card)
 		{
 		case Parser::Aggregate<T>::Cardinality::UNSET:
-			return Error::NO_CARDINALITY_SET;
+			throw std::logic_error("A cardinality must be configured");
 			break;
 		case Parser::Aggregate<T>::Cardinality::BETWEEN:
 			if (m_parsed_vals.size() < m_min_count || m_parsed_vals.size() > m_max_count)
