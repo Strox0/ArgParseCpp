@@ -7,10 +7,11 @@
 #include <system_error>
 #include <vector>
 #include <string>
-#include <algorithm>
 #include <unordered_set>
 #include <functional>
-#include <vector>
+#include <concepts>
+#include <utility>
+#include <unordered_map>
 
 namespace Parser
 {
@@ -24,7 +25,6 @@ namespace Parser
 		VAL_VALIDATION_INVALID,
 		COL_VALIDATION_INVALID,
 		TRANSFORMATION_ERROR,
-		FLAG_AS_ARG,
 		MISSING_VALUE,
 		UNKNOWN_VALUE,
 		DEFAULT_ALREADY_SET,
@@ -35,13 +35,9 @@ namespace Parser
 		NO_CARDINALITY_SET,
 		HELP_QUERY,
 		NAME_ALREADY_USED,
+		MISSING_NAME,
 		CARDINALITY_VALIDATION_FAIL,
-	};
-
-	enum class ErrorPolicy
-	{
-		Return,
-		Exit
+		FLAG_HAS_EQUALS_VALUE,
 	};
 
 	bool Parse(std::string_view v, int64_t& out);
@@ -60,8 +56,12 @@ namespace Parser
 	template <typename T>
 	concept Parseable = requires(std::string_view v, T& out)
 	{
-		Parse(v, out);
-	};
+		{Parse(v, out)} -> std::convertible_to<bool>;
+	} 
+	&& std::is_default_constructible_v<T>
+	&& std::is_copy_assignable_v<T>
+	&& std::is_copy_constructible_v<T>
+	&& !std::is_same_v<T,bool>;
 
 	class ArgParser;
 
@@ -153,8 +153,10 @@ namespace Parser
 	protected:
 		void Finalize() override;
 		void AddValue(std::string_view val) override {};
-
+		
 	private:
+		friend ArgParser;
+		void SetTrue();
 		bool m_state = false;
 	};
 
@@ -169,7 +171,7 @@ namespace Parser
 		bool Provided() const;
 		std::vector<T> Value() const;
 		const std::vector<T>& ValueRef() const;
-		std::vector<T> ValueOr(const std::vector<T>& backup_val);
+		std::vector<T> ValueOr(const std::vector<T>& backup_val) const;
 
 		template <class Validation>
 		requires std::invocable<Validation&, std::string_view>&&
@@ -247,64 +249,62 @@ namespace Parser
 		ArgParser() = delete;
 
 		template<typename T>
-		Argument<T>& Add(std::string_view name, const std::vector<std::string>& aliases = {});
+		Argument<T>& Add(const std::string& name, const std::vector<std::string>& aliases = {});
 
 		template<typename T>
-		Argument<T>& AddPositional(std::string_view helper_name);
+		Argument<T>& AddPositional(const std::string& helper_name);
 
 		template<typename T>
-		Aggregate<T>& AddAggregate(std::string_view name, const std::vector<std::string>& aliases = {});
+		Aggregate<T>& AddAggregate(const std::string& name, const std::vector<std::string>& aliases = {});
 
-		Flag& AddFlag(std::string_view name, const std::vector<std::string>& aliases = {});
+		Flag& AddFlag(const std::string& name, const std::vector<std::string>& aliases = {});
 
 		void Help(std::string_view help_msg);
 
-		Error ParseAndValidate(ErrorPolicy error_policy);
+		Error ParseAndValidate();
 
 	private:
-		Error HandleError(ErrorPolicy error_policy, int exit_code = 1);
+		Error HandleError();
+		Error CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al);
+		bool IsKnownName(const std::string& name);
+		bool IsKnownName(std::string& name);
+		std::pair<std::string,std::string> ParseTokenWithEquals(const std::string& token, bool& has_value);
 
 	private:
-		std::vector<std::unique_ptr<ArgumentBase>> m_args;
+
+		enum class ArgType
+		{
+			Scalar,
+			Positional,
+			Aggregate,
+			Flag
+		};
+
+		std::vector<std::shared_ptr<ArgumentBase>> m_args;
 		std::vector<std::unique_ptr<ArgumentBase>> m_positionals;
-		std::vector<std::unique_ptr<ArgumentBase>> m_aggregates;
 		std::vector<std::string> m_tokens;
 		Error m_error;
 		std::string m_help;
-		std::unordered_set<std::string> m_names;
-		size_t m_option_stop;
+		std::unordered_map<std::string, std::pair<ArgType,std::shared_ptr<ArgumentBase>>> m_name_arg_map;
+		std::unordered_map<std::string, std::string> m_alias_map;
 	};
 
 	template<typename T>
-	inline Argument<T>& ArgParser::Add(std::string_view name, const std::vector<std::string>& aliases)
+	inline Argument<T>& ArgParser::Add(const std::string& name, const std::vector<std::string>& aliases)
 	{
-		std::vector<std::string> names;
-		names.push_back(std::string(name));
-		names.insert(names.end(), aliases.begin(), aliases.end());
-
-		for (const auto& n : names)
+		m_error = CheckAndRegisterNames(name, aliases);
+		m_args.emplace_back(std::make_shared<Argument<T>>());
+		if (m_error == Error::SUCCESS)
 		{
-			if (m_names.contains(std::string(n)))
-			{
-				m_error = Error::NAME_ALREADY_USED;
-				m_args.emplace_back(std::make_unique<Argument<T>>());
-				return *(Argument<T>*)m_args.back().get();
-			}
-			else
-				m_names.insert(std::string(n));
+			m_name_arg_map[name] = std::make_pair(ArgType::Scalar, m_args.back());
+			m_args.back()->AddName(name);
+			m_args.back()->AddAliases(aliases);
 		}
-
-		if (typeid(bool) == typeid(T))
-			m_error = Error::FLAG_AS_ARG;
-
-		m_args.emplace_back(std::make_unique<Argument<T>>());
-		m_args.back()->AddName(name);
-		m_args.back()->AddAliases(aliases);
 		return *(Argument<T>*)m_args.back().get();
 	}
 
 	template<typename T>
-	inline Argument<T>& ArgParser::AddPositional(std::string_view helper_name)
+	inline Argument<T>& ArgParser::AddPositional(const std::string& helper_name)
 	{
 		m_positionals.emplace_back(std::make_unique<Argument<T>>());
 		m_positionals.back()->AddName(helper_name);
@@ -312,28 +312,17 @@ namespace Parser
 	}
 
 	template<typename T>
-	inline Aggregate<T>& ArgParser::AddAggregate(std::string_view name, const std::vector<std::string>& aliases)
+	inline Aggregate<T>& ArgParser::AddAggregate(const std::string& name, const std::vector<std::string>& aliases)
 	{
-		std::vector<std::string> names;
-		names.push_back(std::string(name));
-		names.insert(names.end(), aliases.begin(), aliases.end());
-
-		for (const auto& n : names)
+		m_error = CheckAndRegisterNames(name, aliases);
+		m_args.emplace_back(std::make_shared<Aggregate<T>>());
+		if (m_error == Error::SUCCESS)
 		{
-			if (m_names.contains(std::string(n)))
-			{
-				m_error = Error::NAME_ALREADY_USED;
-				m_aggregates.emplace_back(std::make_unique<Aggregate<T>>());
-				return *(Aggregate<T>*)m_aggregates.back().get();
-			}
-			else
-				m_names.insert(std::string(n));
+			m_name_arg_map[name] = std::make_pair(ArgType::Aggregate, m_args.back());
+			m_args.back()->AddName(name);
+			m_args.back()->AddAliases(aliases);
 		}
-
-		m_aggregates.emplace_back(std::make_unique<Aggregate<T>>());
-		m_aggregates.back()->AddName(name);
-		m_aggregates.back()->AddAliases(aliases);
-		return *(Aggregate<T>*)m_aggregates.back().get();
+		return *(Aggregate<T>*)m_args.back().get();
 	}
 
 	template<Parseable T>
@@ -361,7 +350,7 @@ namespace Parser
 	template<Parseable T>
 	inline T Argument<T>::Value() const
 	{
-		if (!m_locked)
+		if (!m_locked || m_error != Error::SUCCESS)
 			return T{};
 
 		return m_parsed_val;
@@ -370,13 +359,24 @@ namespace Parser
 	template<Parseable T>
 	inline const T& Argument<T>::ValueRef() const
 	{
+		if (!m_locked || m_error != Error::SUCCESS)
+			return T{};
+
 		return m_parsed_val;
 	}
 
 	template<Parseable T>
 	inline T Argument<T>::ValueOr(const T& backup_val) const
 	{
-		return m_set ? m_parsed_val : backup_val;
+		if (!m_locked)
+			return T{};
+
+		if (m_set && m_error == Error::SUCCESS)
+			return m_parsed_val;
+		else if (m_has_default)
+			return m_default_val;
+		else
+			return backup_val;
 	}
 
 	template<Parseable T>
@@ -464,7 +464,7 @@ namespace Parser
 	template<Parseable T>
 	inline Argument<T>& Argument<T>::Help(std::string_view help_msg)
 	{
-		if (m_locked)
+		if (m_locked || help_msg.empty())
 			return *this;
 
 		m_help = help_msg;
@@ -618,19 +618,33 @@ namespace Parser
 	template<Parseable T>
 	inline std::vector<T> Aggregate<T>::Value() const
 	{
+		if (!m_locked || m_error != Error::SUCCESS)
+			return std::vector<T>{};
+
 		return m_parsed_vals;
 	}
 
 	template<Parseable T>
 	inline const std::vector<T>& Aggregate<T>::ValueRef() const
 	{
+		if (!m_locked || m_error != Error::SUCCESS)
+			return std::vector<T>{};
+
 		return m_parsed_vals;
 	}
 
 	template<Parseable T>
-	inline std::vector<T> Aggregate<T>::ValueOr(const std::vector<T>& backup_val)
+	inline std::vector<T> Aggregate<T>::ValueOr(const std::vector<T>& backup_val) const
 	{
-		return m_set ? m_parsed_vals : backup_val;
+		if (!m_locked)
+			return std::vector<T>{};
+
+		if (m_set && m_error == Error::SUCCESS)
+			return m_parsed_vals;
+		else if (m_has_default)
+			return m_default_vals;
+		else
+			return backup_val;
 	}
 
 	template<Parseable T>
@@ -654,7 +668,12 @@ namespace Parser
 	template<Parseable T>
 	inline Aggregate<T>& Aggregate<T>::Help(std::string_view help_msg)
 	{
+		if (m_locked || help_msg.empty())
+			return *this;
+
 		m_help = help_msg;
+		if (m_help.back() != '\n')
+			m_help += '\n';
 		return *this;
 	}
 

@@ -1,204 +1,171 @@
 #include "ArgParser.h"
 #include <iostream>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
-Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUCCESS), m_option_stop(std::numeric_limits<size_t>::max())
+Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUCCESS)
 {
 	for (size_t i = 1; i < argc; i++)
 	{
-		std::string token = argv[i];
-		if (token == "--")
-		{
-			m_option_stop = i - 1;
-		}
-		size_t index = token.find('=');
-		if (index != token.npos)
-		{
-			std::string t1 = token.substr(0, index);
-			std::string t2 = token.substr(index + 1);
-			if (!t1.empty())
-				m_tokens.emplace_back(t1);
-			if (!t2.empty())
-				m_tokens.emplace_back(t2);
-
-			if (!t2.empty() && !t1.empty() && m_option_stop != std::numeric_limits<size_t>::max())
-				m_option_stop += 1;
-			else if (t2.empty() && t1.empty() && m_option_stop != std::numeric_limits<size_t>::max())
-				m_option_stop -= 1;
-		}
-		else
-			m_tokens.emplace_back(argv[i]);
+		m_tokens.emplace_back(argv[i]);
 	}
 }
 
-Parser::Flag& Parser::ArgParser::AddFlag(std::string_view name, const std::vector<std::string>& aliases)
+Parser::Flag& Parser::ArgParser::AddFlag(const std::string& name, const std::vector<std::string>& aliases)
 {
-	std::vector<std::string> names;
-	names.push_back(std::string(name));
-	names.insert(names.end(), aliases.begin(), aliases.end());
-
-	for (const auto& n : names)
+	m_error = CheckAndRegisterNames(name, aliases);
+	m_args.emplace_back(std::make_unique<Flag>());
+	if (m_error == Error::SUCCESS)
 	{
-		if (m_names.contains(std::string(n)))
-		{
-			m_error = Error::NAME_ALREADY_USED;
-			m_args.emplace_back(std::make_unique<Flag>());
-			return *(Flag*)m_args.back().get();
-		}
-		else
-			m_names.insert(std::string(n));
+		m_name_arg_map[name] = std::make_pair(ArgType::Flag, m_args.back());
+		m_args.back()->AddName(name);
+		m_args.back()->AddAliases(aliases);
 	}
-
-	auto it = std::find(m_tokens.begin(), m_tokens.end(), name);
-	if (!aliases.empty() && it == m_tokens.end())
-	{
-		for (const auto& n : aliases)
-		{
-			if (it != m_tokens.end())
-				break;
-			it = std::find(m_tokens.begin(), m_tokens.end(), n);
-		}
-	}
-
-	if (it == m_tokens.end())
-	{
-		m_args.emplace_back(std::make_unique<Flag>());
-	}
-	else
-	{
-		m_args.emplace_back(std::make_unique<Flag>(true));
-		m_tokens.erase(it);
-	}
-
 	return *(Flag*)m_args.back().get();
 }
 
 void Parser::ArgParser::Help(std::string_view v)
 {
+	if (v.empty())
+		return;
+
 	m_help = v;
 	if (m_help.back() != '\n')
 		m_help += '\n';
 }
 
-Parser::Error Parser::ArgParser::ParseAndValidate(ErrorPolicy error_policy)
+Parser::Error Parser::ArgParser::ParseAndValidate()
 {
 	if (m_error != Parser::Error::SUCCESS)
 	{
-		return HandleError(error_policy);
+		return HandleError();
 	}
 
-	if (std::find(m_tokens.begin(), m_tokens.end(), "--help") != m_tokens.end() ||
-		std::find(m_tokens.begin(), m_tokens.end(), "-h") != m_tokens.end()
-		)
+	size_t positionals_index = 0;
+	bool options_end = false;
+	for (auto curr = m_tokens.begin(); curr < m_tokens.end(); curr++)
 	{
-		std::cout << m_help;
-
-		for (auto& arg : m_args)
+		const std::string& token = *curr;
+		if (!options_end)
 		{
-			std::cout << arg->GetHelp();
-		}
-
-		m_error = Error::HELP_QUERY;
-		return HandleError(error_policy, 0);
-	}
-
-	for (auto& arg : m_args)
-	{
-		auto it = std::find(m_tokens.begin(), m_tokens.end(), arg->GetName());
-		if (!arg->GetAliases().empty() && it == m_tokens.end())
-		{
-			for (const auto& n : arg->GetAliases())
+			if (token == "--")
 			{
-				if (it != m_tokens.end())
-					break;
-				it = std::find(m_tokens.begin(), m_tokens.end(), n);
+				options_end = true;
+				continue;
 			}
-		}
-
-		if (it != m_tokens.end() && it < std::find(m_tokens.begin(),m_tokens.end(),"--"))
-		{
-			if (it + 1 != m_tokens.end())
+			else if (token == "--help" || token == "-h")
 			{
-				if (m_names.contains(*(it + 1)))
+				m_error = Error::HELP_QUERY;
+				return HandleError();
+			}
+
+			bool has_value = false;
+			std::pair<std::string, std::string> pair = ParseTokenWithEquals(token, has_value);
+			if (has_value && pair.second.empty())
+			{
+				m_error = Error::MISSING_VALUE;
+				return HandleError();
+			}
+
+			if (IsKnownName(pair.first))
+			{
+				ArgumentBase& arg = *m_name_arg_map.at(pair.first).second;
+				switch (m_name_arg_map.at(pair.first).first)
 				{
-					m_error = Error::MISSING_VALUE;
-					return HandleError(error_policy);
-				}
-				else
+				case Parser::ArgParser::ArgType::Scalar:
 				{
-					arg->AddValue(*(it + 1));
-					m_tokens.erase(it, it + 2);
+					if (has_value)
+					{
+						arg.AddValue(pair.second);
+					}
+					else if (curr + 1 != m_tokens.end())
+					{
+						curr++;
+						if (*curr != "--" && !IsKnownName(ParseTokenWithEquals(*curr, has_value).first))
+						{
+							arg.AddValue(*curr);
+						}
+						else
+						{
+							curr--;
+							m_error = Error::MISSING_VALUE;
+							return HandleError();
+						}
+					}
+					else
+					{
+						m_error = Error::MISSING_VALUE;
+						return HandleError();
+					}
+					break;
 				}
+				case Parser::ArgParser::ArgType::Aggregate:
+				{
+					bool found_value = has_value;
+					if (has_value)
+					{
+						arg.AppendValue(pair.second);
+					}
+
+					while (true)
+					{
+						curr++;
+						if (curr == m_tokens.end() || *curr == "--" || IsKnownName(ParseTokenWithEquals(*curr, has_value).first))
+						{
+							curr--;
+							break;
+						}
+						found_value = true;
+
+						arg.AppendValue(*curr);
+					}
+
+					if (!found_value)
+					{
+						m_error = Error::MISSING_VALUE;
+						return HandleError();
+					}
+					break;
+				}
+				case Parser::ArgParser::ArgType::Flag:
+					if (has_value)
+					{
+						m_error = Error::FLAG_HAS_EQUALS_VALUE;
+						return HandleError();
+					}
+					((Flag&)arg).SetTrue();
+					break;
+				}
+			}
+			else if (positionals_index < m_positionals.size())
+			{
+				m_positionals[positionals_index]->AddValue(token);
+				positionals_index++;
 			}
 			else
 			{
-				m_error = Error::MISSING_VALUE;
-				return HandleError(error_policy);
+				m_error = Parser::Error::UNKNOWN_VALUE;
+				return HandleError();
 			}
-		}
-	}
-
-	for (auto& arg : m_aggregates)
-	{
-		std::vector<std::string_view> names;
-		names.push_back(arg->GetName());
-		names.insert(names.end(), arg->GetAliases().begin(), arg->GetAliases().end());
-		for (auto& name : names)
-		{
-			while (true)
-			{
-				auto it = std::find(m_tokens.begin(), m_tokens.end(), name);
-				if (it != m_tokens.end() && it < std::find(m_tokens.begin(), m_tokens.end(), "--"))
-				{
-					std::vector<std::string>::iterator t = it;
-					while (true)
-					{
-						t++;
-						if (t == m_tokens.end() || m_names.contains(*t) || *t == "--")
-							break;
-						else
-							arg->AppendValue(*t);
-					}
-					m_tokens.erase(it, t);
-				}
-				else
-					break;
-			}
-		}
-	}
-
-	{
-		auto it = std::find(m_tokens.begin(), m_tokens.end(), "--");
-		if (it != m_tokens.end())
-			m_tokens.erase(it);
-	}
-
-	for (size_t i = 0; i < m_positionals.size(); i++)
-	{
-		std::string t;
-		if (!m_tokens.empty())
-		{
-			t = m_tokens.front();
-			m_tokens.erase(m_tokens.begin());
 		}
 		else
-			break;
-
-		m_positionals[i]->AddValue(t);
-	}
-	
-	if (!m_tokens.empty())
-	{
-		m_error = Parser::Error::UNKNOWN_VALUE;
-		return HandleError(error_policy);
-	}
-
-	for (auto& arg : m_aggregates)
-	{
-		arg->Finalize();
-		m_error = arg->GetError();
-		if (m_error != Parser::Error::SUCCESS)
 		{
-			return HandleError(error_policy);
+			if (positionals_index < m_positionals.size())
+			{
+				m_positionals[positionals_index]->AddValue(token);
+				positionals_index++;
+			}
+			else
+			{
+				m_error = Parser::Error::UNKNOWN_VALUE;
+				return HandleError();
+			}
 		}
 	}
 
@@ -210,14 +177,14 @@ Parser::Error Parser::ArgParser::ParseAndValidate(ErrorPolicy error_policy)
 		else if (!m_pos_req && arg->m_required)
 		{
 			m_error = Error::REQ_POS_AFTER_OPTIONAL;
-			return HandleError(error_policy);
+			return HandleError();
 		}
 
 		arg->Finalize();
 		m_error = arg->GetError();
 		if (m_error != Parser::Error::SUCCESS)
 		{
-			return HandleError(error_policy);
+			return HandleError();
 		}
 	}
 
@@ -227,19 +194,85 @@ Parser::Error Parser::ArgParser::ParseAndValidate(ErrorPolicy error_policy)
 		m_error = arg->GetError();
 		if (m_error != Parser::Error::SUCCESS)
 		{
-			return HandleError(error_policy);
+			return HandleError();
 		}
 	}
 
 	return Parser::Error::SUCCESS;
 }
 
-Parser::Error Parser::ArgParser::HandleError(ErrorPolicy error_policy, int exit_code)
+Parser::Error Parser::ArgParser::HandleError()
 {
-	std::cout << "Arg Error: " << (int)m_error << std::endl;
-	if (error_policy == ErrorPolicy::Exit)
-		std::exit(exit_code);
+	std::cerr << "Arg Error: " << (int)m_error << std::endl;
 	return m_error;
+}
+
+Parser::Error Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al)
+{
+	if (name.empty())
+		return Error::MISSING_NAME;
+
+	if (m_name_arg_map.contains(name) || name == "--help" || name == "-h" || name == "--" || m_alias_map.contains(name))
+		return Error::NAME_ALREADY_USED;
+
+	if (!al.empty())
+	{
+		std::unordered_set<std::string> tmp;
+		tmp.insert("--help");
+		tmp.insert("-h");
+		tmp.insert("--");
+		tmp.insert(name);
+		for (const auto& n : al)
+		{
+			if (tmp.contains(n) || m_name_arg_map.contains(n) || m_alias_map.contains(n))
+				return Error::NAME_ALREADY_USED;
+			else
+				tmp.insert(n);
+		}
+
+		for (auto& n : al)
+		{
+			m_alias_map[n] = name;
+		}
+	}
+
+	return Error::SUCCESS;
+}
+
+bool Parser::ArgParser::IsKnownName(const std::string& name)
+{
+	if (m_alias_map.contains(name))
+	{
+		std::string s = m_alias_map[name];
+		return m_name_arg_map.contains(s);
+	}
+	else
+	{
+		return m_name_arg_map.contains(name);
+	}
+}
+
+bool Parser::ArgParser::IsKnownName(std::string& name)
+{
+	if (m_alias_map.contains(name))
+		name = m_alias_map[name];
+
+	return m_name_arg_map.contains(name);
+}
+
+std::pair<std::string, std::string> Parser::ArgParser::ParseTokenWithEquals(const std::string& token, bool& has_value)
+{
+	size_t i = token.find('=');
+	if (i != token.npos)
+	{
+		has_value = true;
+		return { token.substr(0, i), token.substr(i+1) };
+	}
+	else
+	{
+		has_value = false;
+		return { token,token };
+	}
 }
 
 Parser::Error Parser::ArgumentBase::GetError() const
@@ -289,6 +322,9 @@ bool Parser::Flag::Value() const
 
 Parser::Flag& Parser::Flag::Help(std::string_view help_msg)
 {
+	if (m_locked || help_msg.empty())
+		return *this;
+
 	m_help = help_msg;
 	if (m_help.back() != '\n')
 		m_help += '\n';
@@ -297,6 +333,16 @@ Parser::Flag& Parser::Flag::Help(std::string_view help_msg)
 
 void Parser::Flag::Finalize()
 {
+	if (m_locked || m_error != Error::SUCCESS)
+		return;
+
+	m_locked = true;
+}
+
+void Parser::Flag::SetTrue()
+{
+	if (!m_locked)
+		m_state = true;
 }
 
 bool Parser::Parse(std::string_view v, int64_t& out)
