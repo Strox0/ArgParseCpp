@@ -100,8 +100,17 @@ namespace parser_tests
 #define CHECK_ERROR(parser_expression, expected_error)                           \
 	do                                                                           \
 	{                                                                            \
-          (parser_expression).ParseAndValidate();                                 \
-          CHECK_EQ((parser_expression).GetDiagnostics().ec,(expected_error));     \
+		const auto parser_test_expected_error = (expected_error);                 \
+		const auto parser_test_parse_result =                                    \
+			(parser_expression).ParseAndValidate();                                \
+		CHECK_EQ(                                                               \
+			parser_test_parse_result,                                              \
+			parser_test_expected_error == Parser::Error::SUCCESS                   \
+				? Parser::ArgParseResult::SUCCESS                                   \
+				: Parser::ArgParseResult::ERROR);                                   \
+		CHECK_EQ(                                                               \
+			(parser_expression).GetDiagnostics().ec,                              \
+			parser_test_expected_error);                                          \
 	} while (false)
 
 	template <typename Exception, typename Callable>
@@ -308,6 +317,24 @@ namespace parser_tests
 	static void name()
 
 	using Parser::Error;
+
+	void CheckReportedError(
+		Parser::ArgParser& parser,
+		Error expected_error,
+		std::string_view expected_argument,
+		std::string_view expected_token,
+		std::string_view expected_detail,
+		std::string_view expected_message)
+	{
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::ERROR);
+
+		const Parser::Diagnostic& diagnostic = parser.GetDiagnostics();
+		CHECK_EQ(diagnostic.ec, expected_error);
+		CHECK_EQ(diagnostic.arg_name, std::string(expected_argument));
+		CHECK_EQ(diagnostic.opt_token, std::string(expected_token));
+		CHECK_EQ(diagnostic.opt_error_message, std::string(expected_detail));
+		CHECK_EQ(parser.GetErrorMessage(), std::string(expected_message));
+	}
 
 	// -----------------------------------------------------------------------------
 	// Direct Parse overloads
@@ -1375,7 +1402,11 @@ namespace parser_tests
 
 	TEST(LongHelpReturnsHelpQuery)
 	{
-		throw std::exception("LongHelpReturnsHelpQuery not implemented");
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Help("Application help.");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::HELP_REQUESTED);
 	}
 
 	TEST(ShortHelpReturnsHelpQuery)
@@ -1470,6 +1501,302 @@ namespace parser_tests
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 		CHECK_EQ(value.Value(), std::string("--help"));
+	}
+
+
+	// -----------------------------------------------------------------------------
+	// Structured diagnostics and formatted error reporting
+	// -----------------------------------------------------------------------------
+
+	TEST(MissingValueDiagnosticUsesSuppliedAlias)
+	{
+		SimulatedArgv args{ "-c" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count", { "-c" });
+
+		CheckReportedError(
+			parser,
+			Error::MISSING_VALUE,
+			"-c",
+			"",
+			"",
+			"Error: argument '-c' requires a value.");
+	}
+
+	TEST(MissingRequiredDiagnostic)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--path").Required();
+
+		CheckReportedError(
+			parser,
+			Error::MISSING_REQUIRED,
+			"--path",
+			"",
+			"",
+			"Error: required argument '--path' was not provided.");
+	}
+
+	TEST(ParseFailureDiagnosticPreservesSuppliedAliasAndReason)
+	{
+		SimulatedArgv args{ "-c", "not-a-number" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::int64_t>("--count", { "-c" });
+
+		CheckReportedError(
+			parser,
+			Error::PARSE_FAIL,
+			"-c",
+			"not-a-number",
+			"expected an integer",
+			"Error: failed to parse value 'not-a-number' for argument '-c': "
+			"expected an integer.");
+	}
+
+	TEST(Int8ParseFailurePreservesInvalidTextReason)
+	{
+		std::int8_t value{};
+		const Parser::Result result = Parser::Parse("not-a-number", value);
+
+		CHECK_FALSE(result);
+		CHECK_EQ(result.error_message, std::string("expected an integer"));
+	}
+
+	TEST(Uint8ParseFailurePreservesRangeReason)
+	{
+		std::uint8_t value{};
+		const Parser::Result result = Parser::Parse("256", value);
+
+		CHECK_FALSE(result);
+		CHECK_EQ(result.error_message, std::string("integer result out of range"));
+	}
+
+	TEST(TextValidationDiagnosticIncludesCallbackDetail)
+	{
+		SimulatedArgv args{ "--name", "abc123" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--name").ValidateText(
+			[](std::string_view)
+			{
+				return Parser::Result::Failure("letters only");
+			});
+
+		CheckReportedError(
+			parser,
+			Error::TEXT_VALIDATION_INVALID,
+			"--name",
+			"abc123",
+			"letters only",
+			"Error: invalid text value 'abc123' for argument '--name': letters only.");
+	}
+
+	TEST(TransformationDiagnosticIncludesCallbackDetail)
+	{
+		SimulatedArgv args{ "--name", "anything" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--name").Transform(
+			[](std::string&)
+			{
+				return Parser::Result::Failure("normalization rejected input");
+			});
+
+		CheckReportedError(
+			parser,
+			Error::TRANSFORMATION_ERROR,
+			"--name",
+			"anything",
+			"normalization rejected input",
+			"Error: could not transform value 'anything' for argument '--name': "
+			"normalization rejected input.");
+	}
+
+	TEST(ValueValidationDiagnosticDoesNotDuplicateFinalPeriod)
+	{
+		SimulatedArgv args{ "--scale", "-0.5" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<double>("--scale").ValidateValue(
+			[](const double&)
+			{
+				return Parser::Result::Failure("scale must be positive.");
+			});
+
+		CheckReportedError(
+			parser,
+			Error::VAL_VALIDATION_INVALID,
+			"--scale",
+			"-0.5",
+			"scale must be positive.",
+			"Error: invalid value '-0.5' for argument '--scale': "
+			"scale must be positive.");
+	}
+
+	TEST(CustomDiagnosticPreservesExclamationMarkWithoutAddingPeriod)
+	{
+		SimulatedArgv args{ "--name", "bad" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<std::string>("--name").ValidateText(
+			[](std::string_view)
+			{
+				return Parser::Result::Failure("name is invalid!");
+			});
+
+		CheckReportedError(
+			parser,
+			Error::TEXT_VALIDATION_INVALID,
+			"--name",
+			"bad",
+			"name is invalid!",
+			"Error: invalid text value 'bad' for argument '--name': name is invalid!");
+	}
+
+	TEST(UnknownEqualsArgumentDiagnosticIntentionallyReportsOnlyName)
+	{
+		SimulatedArgv args{ "--does-not-exist=payload" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+
+		CheckReportedError(
+			parser,
+			Error::UNKNOWN_ARGUMENT,
+			"--does-not-exist",
+			"",
+			"",
+			"Error: unknown argument '--does-not-exist'.");
+	}
+
+	TEST(FlagValueDiagnosticUsesSuppliedAlias)
+	{
+		SimulatedArgv args{ "-v=yes" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddFlag("--verbose", { "-v" });
+
+		CheckReportedError(
+			parser,
+			Error::FLAG_HAS_EQUALS_VALUE,
+			"-v",
+			"",
+			"",
+			"Error: flag '-v' does not accept a value.");
+	}
+
+	TEST(ExactCardinalityDiagnosticContainsStructuredCounts)
+	{
+		SimulatedArgv args{ "--items", "1", "2" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").Exactly(3);
+
+		CheckReportedError(
+			parser,
+			Error::CARDINALITY_VALIDATION_FAIL,
+			"--items",
+			"",
+			"",
+			"Error: argument '--items' expects exactly 3 values, but received 2.");
+
+		const Parser::Diagnostic::Aggregate& aggregate =
+			parser.GetDiagnostics().aggregate;
+		CHECK_EQ(aggregate.card, Parser::Cardinality::EXACTLY);
+		CHECK_EQ(aggregate.count, std::size_t{ 3 });
+		CHECK_EQ(aggregate.received_count, std::size_t{ 2 });
+	}
+
+	TEST(BetweenCardinalityDiagnosticContainsStructuredBounds)
+	{
+		SimulatedArgv args{ "--items", "1", "2", "3", "4" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items").Between(1, 3);
+
+		CheckReportedError(
+			parser,
+			Error::CARDINALITY_VALIDATION_FAIL,
+			"--items",
+			"",
+			"",
+			"Error: argument '--items' expects between 1 and 3 values, but "
+			"received 4.");
+
+		const Parser::Diagnostic::Aggregate& aggregate =
+			parser.GetDiagnostics().aggregate;
+		CHECK_EQ(aggregate.card, Parser::Cardinality::BETWEEN);
+		CHECK_EQ(aggregate.min, std::size_t{ 1 });
+		CHECK_EQ(aggregate.max, std::size_t{ 3 });
+		CHECK_EQ(aggregate.received_count, std::size_t{ 4 });
+	}
+
+	TEST(AggregateValueValidationDiagnosticIdentifiesElement)
+	{
+		SimulatedArgv args{ "--items", "1", "-2", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items")
+			.Exactly(3)
+			.ValidateValue(
+				[](const std::int64_t& value)
+				{
+					return value > 0
+						? Parser::Result::Success()
+						: Parser::Result::Failure("item must be positive");
+				});
+
+		CheckReportedError(
+			parser,
+			Error::VAL_VALIDATION_INVALID,
+			"--items",
+			"-2",
+			"item must be positive",
+			"Error: invalid value '-2' for argument '--items': item must be positive.");
+	}
+
+	TEST(AggregateDefaultStillRunsPerValueValidation)
+	{
+		SimulatedArgv args{};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items")
+			.Exactly(2)
+			.Default({ 1, -2 })
+			.ValidateValue(
+				[](const std::int64_t& value)
+				{
+					return value > 0
+						? Parser::Result::Success()
+						: Parser::Result::Failure(
+							"default values must be positive");
+				});
+
+		CheckReportedError(
+			parser,
+			Error::VAL_VALIDATION_INVALID,
+			"--items",
+			"",
+			"default values must be positive",
+			"Error: invalid value for argument '--items': "
+			"default values must be positive.");
+	}
+
+	TEST(CollectionValidationDiagnosticUsesCallbackDetail)
+	{
+		SimulatedArgv args{ "--items", "1", "2", "3" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<std::int64_t>("--items")
+			.Exactly(3)
+			.ValidateCollection(
+				[](const std::vector<std::int64_t>& values)
+				{
+					if (values[0] + values[1] + values[2] > 5)
+					{
+						return Parser::Result::Failure(
+							"value at index 2 makes the total too large");
+					}
+					return Parser::Result::Success();
+				});
+
+		CheckReportedError(
+			parser,
+			Error::COL_VALIDATION_INVALID,
+			"--items",
+			"",
+			"value at index 2 makes the total too large",
+			"Error: invalid collection for argument '--items': "
+			"value at index 2 makes the total too large.");
 	}
 
 	// -----------------------------------------------------------------------------
