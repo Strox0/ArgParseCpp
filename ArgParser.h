@@ -13,7 +13,6 @@
 #include <utility>
 #include <unordered_map>
 #include <stdexcept>
-#include <expected>
 
 namespace Parser
 {
@@ -183,9 +182,9 @@ namespace Parser
 		void Finalize(Diagnostic& d) override;
 
 	private:
-		using TextValidator = std::function<bool(std::string_view)>;
-		using ValueValidator = std::function<bool(const T&)>;
-		using Transformer = std::function<bool(std::string&)>;
+		using TextValidator = std::function<Result(std::string_view)>;
+		using ValueValidator = std::function<Result(const T&)>;
+		using Transformer = std::function<Result(std::string&)>;
 
 		std::vector<TextValidator> m_text_vals;
 		std::vector<ValueValidator> m_val_vals;
@@ -263,10 +262,10 @@ namespace Parser
 	private:
 		Error ApplyCardinality(Diagnostic& d);
 
-		using TextValidator = std::function<bool(std::string_view)>;
-		using ValueValidator = std::function<bool(const T&)>;
-		using Transformer = std::function<bool(std::string&)>;
-		using CollectionValidator = std::function<bool(const std::vector<T>&)>;
+		using TextValidator = std::function<Result(std::string_view)>;
+		using ValueValidator = std::function<Result(const T&)>;
+		using Transformer = std::function<Result(std::string&)>;
+		using CollectionValidator = std::function<Result(const std::vector<T>&)>;
 
 		std::vector<TextValidator> m_text_vals;
 		std::vector<ValueValidator> m_val_vals;
@@ -914,13 +913,15 @@ namespace Parser
 
 		for (auto& v : m_val_vals)
 		{
-			for (auto& val : m_parsed_vals)
+			for (size_t index = 0; index < m_parsed_vals.size(); index++)
 			{
-				Result r = std::invoke(v, val);
+				Result r = std::invoke(v, m_parsed_vals[index]);
 				if (!r)
 				{
 					m_error = Error::VAL_VALIDATION_INVALID;
 					d.opt_error_message = r.error_message;
+					if (index < m_values.size())
+						d.opt_token = m_values[index];
 					d.arg_name = m_name;
 					d.ec = m_error;
 					return;

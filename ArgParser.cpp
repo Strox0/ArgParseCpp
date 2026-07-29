@@ -83,7 +83,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 
 			bool has_value = false;
 			std::pair<std::string, std::string> pair = ParseTokenWithEquals(token, has_value);
-
+			std::string original_arg_name = pair.first;
 			if (ResolveName(pair.first))
 			{
 				ArgumentBase& arg = *m_name_arg_map.at(pair.first).second;
@@ -94,7 +94,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 					if (has_value && pair.second.empty())
 					{
 						m_error.ec = Error::MISSING_VALUE;
-						m_error.arg_name = pair.first;
+						m_error.arg_name = original_arg_name;
 						FormatError();
 						return ArgParseResult::ERROR;
 					}
@@ -114,7 +114,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 						{
 							curr--;
 							m_error.ec = Error::MISSING_VALUE;
-							m_error.arg_name = pair.first;
+							m_error.arg_name = original_arg_name;
 							FormatError();
 							return ArgParseResult::ERROR;
 						}
@@ -122,7 +122,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 					else
 					{
 						m_error.ec = Error::MISSING_VALUE;
-						m_error.arg_name = pair.first;
+						m_error.arg_name = original_arg_name;
 						FormatError();
 						return ArgParseResult::ERROR;
 					}
@@ -133,7 +133,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 					if (has_value && pair.second.empty())
 					{
 						m_error.ec = Error::MISSING_VALUE;
-						m_error.arg_name = pair.first;
+						m_error.arg_name = original_arg_name;
 						FormatError();
 						return ArgParseResult::ERROR;
 					}
@@ -160,7 +160,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 					if (!found_value)
 					{
 						m_error.ec = Error::MISSING_VALUE;
-						m_error.arg_name = pair.first;
+						m_error.arg_name = original_arg_name;
 						FormatError();
 						return ArgParseResult::ERROR;
 					}
@@ -170,7 +170,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 					if (has_value)
 					{
 						m_error.ec = Error::FLAG_HAS_EQUALS_VALUE;
-						m_error.arg_name = pair.first;
+						m_error.arg_name = original_arg_name;
 						FormatError();
 						return ArgParseResult::ERROR;
 					}
@@ -186,7 +186,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 			else
 			{
 				m_error.ec = Error::UNKNOWN_ARGUMENT;
-				m_error.arg_name = pair.first;
+				m_error.arg_name = original_arg_name;
 				FormatError();
 				return ArgParseResult::ERROR;
 			}
@@ -251,7 +251,11 @@ void Parser::ArgParser::FormatError()
 			{
 				m_formatted_error += ": ";
 				m_formatted_error += m_error.opt_error_message;
+				if (m_formatted_error.back() != '.')
+					m_formatted_error += '.';
 			}
+			else
+				m_formatted_error += '.';
 		};
 
 	switch (m_error.ec)
@@ -272,7 +276,6 @@ void Parser::ArgParser::FormatError()
 		m_formatted_error += "'";
 
 		append_detail();
-		m_formatted_error += '.';
 		break;
 	}
 
@@ -301,7 +304,6 @@ void Parser::ArgParser::FormatError()
 		m_formatted_error += "'";
 
 		append_detail();
-		m_formatted_error += '.';
 		break;
 	}
 
@@ -321,7 +323,6 @@ void Parser::ArgParser::FormatError()
 		m_formatted_error += "'";
 
 		append_detail();
-		m_formatted_error += '.';
 		break;
 	}
 
@@ -341,7 +342,6 @@ void Parser::ArgParser::FormatError()
 		m_formatted_error += "'";
 
 		append_detail();
-		m_formatted_error += '.';
 		break;
 	}
 
@@ -361,7 +361,6 @@ void Parser::ArgParser::FormatError()
 		m_formatted_error += "'";
 
 		append_detail();
-		m_formatted_error += '.';
 		break;
 	}
 
@@ -497,6 +496,8 @@ void Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std
 
 bool Parser::ArgParser::IsKnownName(const std::string& name)
 {
+	if (name == "--help" || name == "-h")
+		return true;
 	if (m_alias_map.contains(name))
 	{
 		std::string s = m_alias_map[name];
@@ -638,11 +639,13 @@ Parser::Result Parser::Parse(std::string_view v, int8_t& out)
 {
 	int16_t value{};
 
-	if (!Parser::ParseInteger(v, value) ||
-		value < INT8_MIN ||
+	Result r = Parser::ParseInteger(v, value);
+	if (!r)
+		return r;
+	if (value < INT8_MIN ||
 		value > INT8_MAX)
 	{
-		return Parser::Result::Failure("result out of range");
+		return Parser::Result::Failure("integer result out of range");
 	}
 
 	out = static_cast<int8_t>(value);
@@ -653,8 +656,11 @@ Parser::Result Parser::Parse(std::string_view v, uint8_t& out)
 {
 	uint16_t value{};
 
-	if (!Parser::ParseInteger(v, value) || value > UINT8_MAX)
-		return Parser::Result::Failure("result out of range");
+	Result r = Parser::ParseInteger(v, value);
+	if (!r)
+		return r;
+	if (value > UINT8_MAX)
+		return Parser::Result::Failure("integer result out of range");
 
 	out = static_cast<uint8_t>(value);
 	return Parser::Result::Success();
