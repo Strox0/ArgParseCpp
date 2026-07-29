@@ -87,6 +87,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 			if (ResolveName(pair.first))
 			{
 				ArgumentBase& arg = *m_name_arg_map.at(pair.first).second;
+				arg.AddName(original_arg_name);
 				switch (m_name_arg_map.at(pair.first).first)
 				{
 				case Parser::ArgParser::ArgType::Scalar:
@@ -251,7 +252,7 @@ void Parser::ArgParser::FormatError()
 			{
 				m_formatted_error += ": ";
 				m_formatted_error += m_error.opt_error_message;
-				if (m_formatted_error.back() != '.')
+				if (m_formatted_error.back() != '.' && m_formatted_error.back() != '?' && m_formatted_error.back() != '!')
 					m_formatted_error += '.';
 			}
 			else
@@ -453,7 +454,6 @@ void Parser::ArgParser::FormatError()
 		break;
 	}
 	}
-
 	std::cout << m_formatted_error << std::endl;
 }
 
