@@ -2163,14 +2163,6 @@ namespace parser_tests
 		CHECK_NEAR(floats.Value()[2], 3.25, 0.000001);
 		CHECK_NEAR(floats.Value()[3], 4.0, 0.000001);
 	}
-
-	TEST(LegacyTooFewArgsIsDocumentedAsUnreachable)
-	{
-		throw TestSkipped(
-			"Error::TOO_FEW_ARGS is legacy and has no documented trigger through "
-			"the current public API");
-	}
-
 } // namespace parser_tests
 
 int main()
@@ -2192,7 +2184,7 @@ int main()
 		catch (const parser_tests::TestSkipped& error)
 		{
 			++skipped;
-			//std::cout << "[SKIP] " << test.name << ": " << error.what() << '\n';
+			std::cout << "[SKIP] " << test.name << ": " << error.what() << '\n';
 		}
 		catch (const std::exception& error)
 		{
