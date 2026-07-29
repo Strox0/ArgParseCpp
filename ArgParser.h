@@ -13,6 +13,7 @@
 #include <utility>
 #include <unordered_map>
 #include <stdexcept>
+#include <expected>
 
 namespace Parser
 {
@@ -26,29 +27,89 @@ namespace Parser
 		COL_VALIDATION_INVALID,
 		TRANSFORMATION_ERROR,
 		MISSING_VALUE,
-		UNKNOWN_VALUE,
-		HELP_QUERY,
+		UNKNOWN_ARGUMENT,
 		CARDINALITY_VALIDATION_FAIL,
 		FLAG_HAS_EQUALS_VALUE,
 	};
 
-	bool Parse(std::string_view v, int64_t& out);
-	bool Parse(std::string_view v, uint64_t& out);
-	bool Parse(std::string_view v, int32_t& out);
-	bool Parse(std::string_view v, uint32_t& out);
-	bool Parse(std::string_view v, int16_t& out);
-	bool Parse(std::string_view v, uint16_t& out);
-	bool Parse(std::string_view v, int8_t& out);
-	bool Parse(std::string_view v, uint8_t& out);
-	bool Parse(std::string_view v, double& out);
-	bool Parse(std::string_view v, long double& out);
-	bool Parse(std::string_view v, float& out);
-	bool Parse(std::string_view v, std::string& out);
-	
+	enum class Cardinality
+	{
+		UNLIMITED,
+		BETWEEN,
+		EXACTLY,
+		ATLEAST,
+		ATMOST,
+	};
+
+	enum class ArgParseResult
+	{
+		SUCCESS,
+		ERROR,
+		HELP_REQUESTED
+	};
+
+	struct Diagnostic
+	{
+		Error ec = Error::SUCCESS;
+		std::string arg_name;
+		std::string opt_token;
+		std::string opt_error_message;
+		struct Aggregate
+		{
+			size_t count = 0;
+			size_t min = 0;
+			size_t max = 0;
+			size_t received_count = 0;
+			Cardinality card = Cardinality::UNLIMITED;
+		}aggregate;
+
+		explicit operator bool() const noexcept
+		{
+			return ec != Error::SUCCESS;
+		}
+	};
+
+	struct Result
+	{
+		bool success;
+		std::string error_message;
+
+		explicit operator bool() const noexcept
+		{
+			return success;
+		}
+
+		static Result Success()
+		{
+			return { true, {} };
+		}
+
+		static Result Failure(std::string message = "")
+		{
+			return { false, std::move(message) };
+		}
+
+		Result(bool b) : success(b) {};
+		Result(bool b, std::string s) : success(b),error_message(s) {};
+	};
+
+	Result Parse(std::string_view v, int64_t& out);
+	Result Parse(std::string_view v, uint64_t& out);
+	Result Parse(std::string_view v, int32_t& out);
+	Result Parse(std::string_view v, uint32_t& out);
+	Result Parse(std::string_view v, int16_t& out);
+	Result Parse(std::string_view v, uint16_t& out);
+	Result Parse(std::string_view v, int8_t& out);
+	Result Parse(std::string_view v, uint8_t& out);
+	Result Parse(std::string_view v, double& out);
+	Result Parse(std::string_view v, long double& out);
+	Result Parse(std::string_view v, float& out);
+	Result Parse(std::string_view v, std::string& out);
+
 	template <typename T>
 	concept Parseable = requires(std::string_view v, T& out)
 	{
-		{Parse(v, out)} -> std::convertible_to<bool>;
+		{Parse(v, out)} -> std::same_as<Result>;
 	} 
 	&& std::is_default_constructible_v<T>
 	&& std::is_copy_assignable_v<T>
@@ -72,7 +133,7 @@ namespace Parser
 		const std::vector<std::string>& GetAliases() const;
 
 	protected:
-		virtual void Finalize() = 0;
+		virtual void Finalize(Diagnostic& diagnostic) = 0;
 		virtual void AppendValue(std::string_view value) {};
 		virtual void AddValue(std::string_view value);
 
@@ -101,17 +162,17 @@ namespace Parser
 
 		template <class Validation>
 		requires std::invocable<Validation&, std::string_view> &&
-		std::convertible_to<std::invoke_result_t<Validation&, std::string_view>, bool>
+		std::convertible_to<std::invoke_result_t<Validation&, std::string_view>, Result>
 		Argument<T>& ValidateText(Validation&& val);
 
 		template <class Validation>
 		requires std::invocable<Validation&, const T&>&&
-		std::convertible_to<std::invoke_result_t<Validation&, const T&>, bool>
+		std::convertible_to<std::invoke_result_t<Validation&, const T&>, Result>
 		Argument<T>& ValidateValue(Validation&& val);
 
 		template<class Transformation>
 		requires std::invocable<Transformation&, std::string&>&&
-		std::convertible_to<std::invoke_result_t<Transformation&, std::string&>, bool>
+		std::convertible_to<std::invoke_result_t<Transformation&, std::string&>, Result>
 		Argument<T>& Transform(Transformation&& trans);
 
 		Argument<T>& Required();
@@ -119,7 +180,7 @@ namespace Parser
 		Argument<T>& Help(std::string_view help_msg);
 
 	protected:
-		void Finalize() override;
+		void Finalize(Diagnostic& d) override;
 
 	private:
 		using TextValidator = std::function<bool(std::string_view)>;
@@ -143,7 +204,7 @@ namespace Parser
 		Flag& Help(std::string_view help_msg);
 
 	protected:
-		void Finalize() override;
+		void Finalize(Diagnostic& d) override;
 		void AddValue(std::string_view val) override {};
 		
 	private:
@@ -167,22 +228,22 @@ namespace Parser
 
 		template <class Validation>
 		requires std::invocable<Validation&, std::string_view>&&
-		std::convertible_to<std::invoke_result_t<Validation&, std::string_view>, bool>
+		std::convertible_to<std::invoke_result_t<Validation&, std::string_view>, Result>
 		Aggregate<T>& ValidateText(Validation&& val);
 
 		template <class Validation>
 		requires std::invocable<Validation&, const T&>&&
-		std::convertible_to<std::invoke_result_t<Validation&, const T&>, bool>
+		std::convertible_to<std::invoke_result_t<Validation&, const T&>, Result>
 		Aggregate<T>& ValidateValue(Validation&& val);
 
 		template<class Transformation>
 		requires std::invocable<Transformation&, std::string&>&&
-		std::convertible_to<std::invoke_result_t<Transformation&, std::string&>, bool>
+		std::convertible_to<std::invoke_result_t<Transformation&, std::string&>, Result>
 		Aggregate<T>& Transform(Transformation&& trans);
 
 		template<class Validation>
 		requires std::invocable<Validation&, const std::vector<T>&>&&
-		std::convertible_to<std::invoke_result_t<Validation&, const std::vector<T>&>, bool>
+		std::convertible_to<std::invoke_result_t<Validation&, const std::vector<T>&>, Result>
 		Aggregate<T>& ValidateCollection(Validation&& val);
 
 		Aggregate<T>& Required();
@@ -196,20 +257,11 @@ namespace Parser
 		Aggregate<T>& Unlimited();
 
 	protected:
-		void Finalize() override;
+		void Finalize(Diagnostic& d) override;
 		void AppendValue(std::string_view val) override;
 
 	private:
-		enum class Cardinality
-		{
-			UNLIMITED,
-			BETWEEN,
-			EXACTLY,
-			ATLEAST,
-			ATMOST,
-		};
-
-		Error ApplyCardinality();
+		Error ApplyCardinality(Diagnostic& d);
 
 		using TextValidator = std::function<bool(std::string_view)>;
 		using ValueValidator = std::function<bool(const T&)>;
@@ -253,10 +305,12 @@ namespace Parser
 
 		void Help(std::string_view help_msg);
 
-		Error ParseAndValidate();
+		ArgParseResult ParseAndValidate();
+		const Diagnostic& GetDiagnostics() const;
+		std::string GetErrorMessage() const;
 
 	private:
-		Error HandleError();
+		void FormatError();
 		void CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al);
 		bool IsKnownName(const std::string& name);
 		bool ResolveName(std::string& name);
@@ -274,7 +328,8 @@ namespace Parser
 		std::vector<std::shared_ptr<ArgumentBase>> m_args;
 		std::vector<std::unique_ptr<ArgumentBase>> m_positionals;
 		std::vector<std::string> m_tokens;
-		Error m_error;
+		Diagnostic m_error;
+		std::string m_formatted_error;
 		std::string m_help;
 		std::unordered_map<std::string, std::pair<ArgType,std::shared_ptr<ArgumentBase>>> m_name_arg_map;
 		std::unordered_map<std::string, std::string> m_alias_map;
@@ -387,8 +442,6 @@ namespace Parser
 		else
 		{
 			m_required = true;
-			if (!m_set)
-				m_error = Error::MISSING_REQUIRED;
 		}
 
 		return *this;
@@ -420,7 +473,7 @@ namespace Parser
 	template<Parseable T>
 	template<class Validation>
 	requires std::invocable<Validation&, std::string_view>&&
-	std::convertible_to<std::invoke_result_t<Validation&, std::string_view>, bool>
+	std::convertible_to<std::invoke_result_t<Validation&, std::string_view>, Result>
 	inline Argument<T>& Parser::Argument<T>::ValidateText(Validation&& val)
 	{
 		if (m_locked)
@@ -433,8 +486,8 @@ namespace Parser
 	template<Parseable T>
 	template<class Validation>
 	requires std::invocable<Validation&, const T&>&&
-	std::convertible_to<std::invoke_result_t<Validation&, const T&>, bool>
-		inline Argument<T>& Parser::Argument<T>::ValidateValue(Validation&& val)
+	std::convertible_to<std::invoke_result_t<Validation&, const T&>, Result>
+	inline Argument<T>& Parser::Argument<T>::ValidateValue(Validation&& val)
 	{
 		if (m_locked)
 			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
@@ -446,7 +499,7 @@ namespace Parser
 	template<Parseable T>
 	template<class Transformation>
 	requires std::invocable<Transformation&, std::string&>&&
-	std::convertible_to<std::invoke_result_t<Transformation&, std::string&>, bool>
+	std::convertible_to<std::invoke_result_t<Transformation&, std::string&>, Result>
 	inline Argument<T>& Parser::Argument<T>::Transform(Transformation&& trans)
 	{
 		if (m_locked)
@@ -472,9 +525,9 @@ namespace Parser
 	}
 
 	template<Parseable T>
-	inline void Argument<T>::Finalize()
+	inline void Argument<T>::Finalize(Diagnostic& d)
 	{
-		if (m_locked || m_error != Error::SUCCESS)
+		if (m_locked)
 			return;
 
 		m_locked = true;
@@ -484,9 +537,14 @@ namespace Parser
 			for (auto& t : m_text_trans)
 			{
 				std::string tmp = m_value;
-				if (!std::invoke(t, tmp))
+				Result r = std::invoke(t, tmp);
+				if (!r)
 				{
 					m_error = Error::TRANSFORMATION_ERROR;
+					d.opt_error_message = r.error_message;
+					d.opt_token = m_value;
+					d.arg_name = m_name;
+					d.ec = m_error;
 					return;
 				}
 				m_value = tmp;
@@ -494,41 +552,63 @@ namespace Parser
 
 			for (auto& v : m_text_vals)
 			{
-				if (!std::invoke(v, m_value))
+				Result r = std::invoke(v, m_value);
+				if (!r)
 				{
 					m_error = Error::TEXT_VALIDATION_INVALID;
+					d.opt_error_message = r.error_message;
+					d.opt_token = m_value;
+					d.arg_name = m_name;
+					d.ec = m_error;
 					return;
 				}
 			}
 
-			if (!Parse(m_value, m_parsed_val))
+			Result r = Parse(m_value, m_parsed_val);
+			if (!r)
 			{
 				m_error = Error::PARSE_FAIL;
+				d.opt_error_message = r.error_message;
+				d.opt_token = m_value;
+				d.arg_name = m_name;
+				d.ec = m_error;
 				return;
 			}
 		}
 		else if (m_has_default)
 			m_parsed_val = m_default_val;
+		else if (m_required)
+		{
+			m_error = Error::MISSING_REQUIRED;
+			d.arg_name = m_name;
+			d.ec = m_error;
+			return;
+		}
 		else
 			return;
 
 		for (auto& v : m_val_vals)
 		{
-			if (!std::invoke(v,m_parsed_val))
+			Result r = std::invoke(v, m_parsed_val);
+			if (!r)
 			{
 				m_error = Error::VAL_VALIDATION_INVALID;
+				d.opt_error_message = r.error_message;
+				d.opt_token = m_value;
+				d.arg_name = m_name;
+				d.ec = m_error;
 				return;
 			}
 		}
 	}
 
 	template <typename T>
-	bool ParseInteger(std::string_view v, T& out)
+	Parser::Result ParseInteger(std::string_view v, T& out)
 	{
 		static_assert(std::is_integral_v<T>);
 
 		if (v.empty())
-			return false;
+			return Parser::Result::Failure("value is empty");
 
 		T value{};
 
@@ -537,20 +617,22 @@ namespace Parser
 
 		const auto [ptr, ec] = std::from_chars(begin, end, value, 10);
 
-		if (ec != std::errc{} || ptr != end)
-			return false;
+		if (ec == std::errc::invalid_argument || ptr != end)
+			return Parser::Result::Failure("expected an integer");
+		else if (ec == std::errc::result_out_of_range)
+			return Parser::Result::Failure("integer result out of range");
 
 		out = value;
-		return true;
+		return Parser::Result::Success();
 	}
 
 	template <typename T>
-	bool ParseFloatingPoint(std::string_view v, T& out)
+	Parser::Result ParseFloatingPoint(std::string_view v, T& out)
 	{
 		static_assert(std::is_floating_point_v<T>);
 
 		if (v.empty())
-			return false;
+			return Parser::Result::Failure("value is empty");
 
 		T value{};
 
@@ -559,11 +641,13 @@ namespace Parser
 
 		const auto [ptr, ec] = std::from_chars(begin, end, value, std::chars_format::general);
 
-		if (ec != std::errc{} || ptr != end)
-			return false;
+		if (ec == std::errc::invalid_argument || ptr != end)
+			return Parser::Result::Failure("expected a floating point value");
+		else if (ec == std::errc::result_out_of_range)
+			return Parser::Result::Failure("floating point result out of range");
 
 		out = value;
-		return true;
+		return Parser::Result::Success();
 	}
 
 	template<Parseable T>
@@ -656,8 +740,6 @@ namespace Parser
 		else
 		{
 			m_required = true;
-			if (!m_set)
-				m_error = Error::MISSING_REQUIRED;
 		}
 
 		return *this;
@@ -754,9 +836,9 @@ namespace Parser
 	}
 
 	template<Parseable T>
-	inline void Aggregate<T>::Finalize()
+	inline void Aggregate<T>::Finalize(Diagnostic& d)
 	{
-		if (m_locked || m_error != Error::SUCCESS)
+		if (m_locked)
 			return;
 
 		m_locked = true;
@@ -768,9 +850,14 @@ namespace Parser
 				for (auto& t : m_text_trans)
 				{
 					std::string tmp = val;
-					if (!std::invoke(t, tmp))
+					Result r = std::invoke(t, tmp);
+					if (!r)
 					{
 						m_error = Error::TRANSFORMATION_ERROR;
+						d.opt_error_message = r.error_message;
+						d.opt_token = val;
+						d.arg_name = m_name;
+						d.ec = m_error;
 						return;
 					}
 					val = tmp;
@@ -778,17 +865,27 @@ namespace Parser
 
 				for (auto& v : m_text_vals)
 				{
-					if (!std::invoke(v, val))
+					Result r = std::invoke(v, val);
+					if (!r)
 					{
 						m_error = Error::TEXT_VALIDATION_INVALID;
+						d.opt_error_message = r.error_message;
+						d.opt_token = val;
+						d.arg_name = m_name;
+						d.ec = m_error;
 						return;
 					}
 				}
 
 				T tmp{};
-				if (!Parse(val, tmp))
+				Result r = Parse(val, tmp);
+				if (!r)
 				{
 					m_error = Error::PARSE_FAIL;
+					d.opt_error_message = r.error_message;
+					d.opt_token = val;
+					d.arg_name = m_name;
+					d.ec = m_error;
 					return;
 				}
 
@@ -797,20 +894,35 @@ namespace Parser
 		}
 		else if (m_has_default)
 			m_parsed_vals = m_default_vals;
+		else if (m_required)
+		{
+			m_error = Error::MISSING_REQUIRED;
+			d.arg_name = m_name;
+			d.ec = m_error;
+			return;
+		}
 		else
 			return;
 
-		m_error = ApplyCardinality();
+		m_error = ApplyCardinality(d);
 		if (m_error != Error::SUCCESS)
+		{
+			d.arg_name = m_name;
+			d.ec = m_error;
 			return;
+		}
 
 		for (auto& v : m_val_vals)
 		{
 			for (auto& val : m_parsed_vals)
 			{
-				if (!std::invoke(v, val))
+				Result r = std::invoke(v, val);
+				if (!r)
 				{
 					m_error = Error::VAL_VALIDATION_INVALID;
+					d.opt_error_message = r.error_message;
+					d.arg_name = m_name;
+					d.ec = m_error;
 					return;
 				}
 			}
@@ -818,9 +930,13 @@ namespace Parser
 
 		for (auto& v : m_col_vals)
 		{
-			if (!std::invoke(v, m_parsed_vals))
+			Result r = std::invoke(v, m_parsed_vals);
+			if (!r)
 			{
 				m_error = Error::COL_VALIDATION_INVALID;
+				d.opt_error_message = r.error_message;
+				d.arg_name = m_name;
+				d.ec = m_error;
 				return;
 			}
 		}
@@ -842,27 +958,48 @@ namespace Parser
 	}
 
 	template<Parseable T>
-	inline Error Aggregate<T>::ApplyCardinality()
+	inline Error Aggregate<T>::ApplyCardinality(Diagnostic& d)
 	{
 		switch (m_card)
 		{
-		case Parser::Aggregate<T>::Cardinality::BETWEEN:
+		case Parser::Cardinality::BETWEEN:
 			if (m_parsed_vals.size() < m_min_count || m_parsed_vals.size() > m_max_count)
+			{
+				d.aggregate.card = m_card;
+				d.aggregate.min = m_min_count;
+				d.aggregate.max = m_max_count;
+				d.aggregate.received_count = m_parsed_vals.size();
 				return Error::CARDINALITY_VALIDATION_FAIL;
+			}
 			break;
-		case Parser::Aggregate<T>::Cardinality::EXACTLY:
+		case Parser::Cardinality::EXACTLY:
 			if (m_parsed_vals.size() != m_exact_count)
+			{
+				d.aggregate.card = m_card;
+				d.aggregate.count = m_exact_count;
+				d.aggregate.received_count = m_parsed_vals.size();
 				return Error::CARDINALITY_VALIDATION_FAIL;
+			}
 			break;
-		case Parser::Aggregate<T>::Cardinality::ATLEAST:
+		case Parser::Cardinality::ATLEAST:
 			if (m_parsed_vals.size() < m_min_count)
+			{
+				d.aggregate.card = m_card;
+				d.aggregate.min = m_min_count;
+				d.aggregate.received_count = m_parsed_vals.size();
 				return Error::CARDINALITY_VALIDATION_FAIL;
+			}
 			break;
-		case Parser::Aggregate<T>::Cardinality::ATMOST:
+		case Parser::Cardinality::ATMOST:
 			if (m_parsed_vals.size() > m_max_count)
+			{
+				d.aggregate.card = m_card;
+				d.aggregate.max = m_max_count;
+				d.aggregate.received_count = m_parsed_vals.size();
 				return Error::CARDINALITY_VALIDATION_FAIL;
+			}
 			break;
-		case Parser::Aggregate<T>::Cardinality::UNLIMITED:
+		case Parser::Cardinality::UNLIMITED:
 			break;
 		}
 
@@ -872,7 +1009,7 @@ namespace Parser
 	template<Parseable T>
 	template <class Validation>
 	requires std::invocable<Validation&, std::string_view>&&
-	std::convertible_to<std::invoke_result_t<Validation&, std::string_view>, bool>
+	std::convertible_to<std::invoke_result_t<Validation&, std::string_view>, Result>
 	inline Aggregate<T>& Aggregate<T>::ValidateText(Validation&& val)
 	{
 		if (m_locked)
@@ -885,7 +1022,7 @@ namespace Parser
 	template<Parseable T>
 	template <class Validation>
 	requires std::invocable<Validation&, const T&>&&
-	std::convertible_to<std::invoke_result_t<Validation&, const T&>, bool>
+	std::convertible_to<std::invoke_result_t<Validation&, const T&>, Result>
 	inline Aggregate<T>& Aggregate<T>::ValidateValue(Validation&& val)
 	{
 		if (m_locked)
@@ -898,7 +1035,7 @@ namespace Parser
 	template<Parseable T>
 	template<class Transformation>
 	requires std::invocable<Transformation&, std::string&>&&
-	std::convertible_to<std::invoke_result_t<Transformation&, std::string&>, bool>
+	std::convertible_to<std::invoke_result_t<Transformation&, std::string&>, Result>
 	inline Aggregate<T>& Aggregate<T>::Transform(Transformation&& trans)
 	{
 		if (m_locked)
@@ -911,7 +1048,7 @@ namespace Parser
 	template<Parseable T>		
 	template<class Validation>
 	requires std::invocable<Validation&, const std::vector<T>&>&&
-	std::convertible_to<std::invoke_result_t<Validation&, const std::vector<T>&>, bool>
+	std::convertible_to<std::invoke_result_t<Validation&, const std::vector<T>&>, Result>
 	inline Aggregate<T>& Aggregate<T>::ValidateCollection(Validation&& val)
 	{
 		if (m_locked)

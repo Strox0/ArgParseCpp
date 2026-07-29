@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-Parser::ArgParser::ArgParser(int argc, char** argv) : m_error(Parser::Error::SUCCESS)
+Parser::ArgParser::ArgParser(int argc, char** argv)
 {
 	for (size_t i = 1; i < argc; i++)
 	{
@@ -43,16 +43,16 @@ void Parser::ArgParser::Help(std::string_view v)
 		m_help += '\n';
 }
 
-Parser::Error Parser::ArgParser::ParseAndValidate()
+Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 {
 	if (m_locked)
 		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
 
 	m_locked = true;
 
-	if (m_error != Parser::Error::SUCCESS)
+	if (m_error)
 	{
-		return HandleError();
+		return ArgParseResult::ERROR;
 	}
 
 	bool m_pos_req = true;
@@ -78,8 +78,7 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 			}
 			else if (token == "--help" || token == "-h")
 			{
-				m_error = Error::HELP_QUERY;
-				return HandleError();
+				return ArgParseResult::HELP_REQUESTED;
 			}
 
 			bool has_value = false;
@@ -94,8 +93,10 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 				{
 					if (has_value && pair.second.empty())
 					{
-						m_error = Error::MISSING_VALUE;
-						return HandleError();
+						m_error.ec = Error::MISSING_VALUE;
+						m_error.arg_name = pair.first;
+						FormatError();
+						return ArgParseResult::ERROR;
 					}
 
 					if (has_value)
@@ -112,14 +113,18 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 						else
 						{
 							curr--;
-							m_error = Error::MISSING_VALUE;
-							return HandleError();
+							m_error.ec = Error::MISSING_VALUE;
+							m_error.arg_name = pair.first;
+							FormatError();
+							return ArgParseResult::ERROR;
 						}
 					}
 					else
 					{
-						m_error = Error::MISSING_VALUE;
-						return HandleError();
+						m_error.ec = Error::MISSING_VALUE;
+						m_error.arg_name = pair.first;
+						FormatError();
+						return ArgParseResult::ERROR;
 					}
 					break;
 				}
@@ -127,8 +132,10 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 				{
 					if (has_value && pair.second.empty())
 					{
-						m_error = Error::MISSING_VALUE;
-						return HandleError();
+						m_error.ec = Error::MISSING_VALUE;
+						m_error.arg_name = pair.first;
+						FormatError();
+						return ArgParseResult::ERROR;
 					}
 
 					bool found_value = has_value;
@@ -152,16 +159,20 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 
 					if (!found_value)
 					{
-						m_error = Error::MISSING_VALUE;
-						return HandleError();
+						m_error.ec = Error::MISSING_VALUE;
+						m_error.arg_name = pair.first;
+						FormatError();
+						return ArgParseResult::ERROR;
 					}
 					break;
 				}
 				case Parser::ArgParser::ArgType::Flag:
 					if (has_value)
 					{
-						m_error = Error::FLAG_HAS_EQUALS_VALUE;
-						return HandleError();
+						m_error.ec = Error::FLAG_HAS_EQUALS_VALUE;
+						m_error.arg_name = pair.first;
+						FormatError();
+						return ArgParseResult::ERROR;
 					}
 					((Flag&)arg).SetTrue();
 					break;
@@ -174,8 +185,10 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 			}
 			else
 			{
-				m_error = Parser::Error::UNKNOWN_VALUE;
-				return HandleError();
+				m_error.ec = Error::UNKNOWN_ARGUMENT;
+				m_error.arg_name = pair.first;
+				FormatError();
+				return ArgParseResult::ERROR;
 			}
 		}
 		else
@@ -187,39 +200,262 @@ Parser::Error Parser::ArgParser::ParseAndValidate()
 			}
 			else
 			{
-				m_error = Parser::Error::UNKNOWN_VALUE;
-				return HandleError();
+				m_error.ec = Error::UNKNOWN_ARGUMENT;
+				m_error.arg_name = token;
+				FormatError();
+				return ArgParseResult::ERROR;
 			}
 		}
 	}
 
 	for (auto& arg : m_positionals)
 	{
-		arg->Finalize();
-		m_error = arg->GetError();
-		if (m_error != Parser::Error::SUCCESS)
+		arg->Finalize(m_error);
+		if (m_error)
 		{
-			return HandleError();
+			FormatError();
+			return ArgParseResult::ERROR;
 		}
 	}
 
 	for (auto& arg : m_args)
 	{
-		arg->Finalize();
-		m_error = arg->GetError();
-		if (m_error != Parser::Error::SUCCESS)
+		arg->Finalize(m_error);
+		if (m_error)
 		{
-			return HandleError();
+			FormatError();
+			return ArgParseResult::ERROR;
 		}
 	}
 
-	return Parser::Error::SUCCESS;
+	return ArgParseResult::SUCCESS;
 }
 
-Parser::Error Parser::ArgParser::HandleError()
+std::string Parser::ArgParser::GetErrorMessage() const
 {
-	std::cerr << "Arg Error: " << (int)m_error << std::endl;
+	return m_formatted_error;
+}
+
+const Parser::Diagnostic& Parser::ArgParser::GetDiagnostics() const
+{
 	return m_error;
+}
+
+void Parser::ArgParser::FormatError()
+{
+	m_formatted_error.clear();
+
+	const auto append_detail = [this]()
+		{
+			if (!m_error.opt_error_message.empty())
+			{
+				m_formatted_error += ": ";
+				m_formatted_error += m_error.opt_error_message;
+			}
+		};
+
+	switch (m_error.ec)
+	{
+	case Parser::Error::PARSE_FAIL:
+	{
+		m_formatted_error = "Error: failed to parse value";
+
+		if (!m_error.opt_token.empty())
+		{
+			m_formatted_error += " '";
+			m_formatted_error += m_error.opt_token;
+			m_formatted_error += "'";
+		}
+
+		m_formatted_error += " for argument '";
+		m_formatted_error += m_error.arg_name;
+		m_formatted_error += "'";
+
+		append_detail();
+		m_formatted_error += '.';
+		break;
+	}
+
+	case Parser::Error::MISSING_REQUIRED:
+	{
+		m_formatted_error =
+			"Error: required argument '" +
+			m_error.arg_name +
+			"' was not provided.";
+		break;
+	}
+
+	case Parser::Error::TEXT_VALIDATION_INVALID:
+	{
+		m_formatted_error = "Error: invalid text value";
+
+		if (!m_error.opt_token.empty())
+		{
+			m_formatted_error += " '";
+			m_formatted_error += m_error.opt_token;
+			m_formatted_error += "'";
+		}
+
+		m_formatted_error += " for argument '";
+		m_formatted_error += m_error.arg_name;
+		m_formatted_error += "'";
+
+		append_detail();
+		m_formatted_error += '.';
+		break;
+	}
+
+	case Parser::Error::VAL_VALIDATION_INVALID:
+	{
+		m_formatted_error = "Error: invalid value";
+
+		if (!m_error.opt_token.empty())
+		{
+			m_formatted_error += " '";
+			m_formatted_error += m_error.opt_token;
+			m_formatted_error += "'";
+		}
+
+		m_formatted_error += " for argument '";
+		m_formatted_error += m_error.arg_name;
+		m_formatted_error += "'";
+
+		append_detail();
+		m_formatted_error += '.';
+		break;
+	}
+
+	case Parser::Error::COL_VALIDATION_INVALID:
+	{
+		m_formatted_error = "Error: invalid collection";
+
+		if (!m_error.opt_token.empty())
+		{
+			m_formatted_error += " '";
+			m_formatted_error += m_error.opt_token;
+			m_formatted_error += "'";
+		}
+
+		m_formatted_error += " for argument '";
+		m_formatted_error += m_error.arg_name;
+		m_formatted_error += "'";
+
+		append_detail();
+		m_formatted_error += '.';
+		break;
+	}
+
+	case Parser::Error::TRANSFORMATION_ERROR:
+	{
+		m_formatted_error = "Error: could not transform value";
+
+		if (!m_error.opt_token.empty())
+		{
+			m_formatted_error += " '";
+			m_formatted_error += m_error.opt_token;
+			m_formatted_error += "'";
+		}
+
+		m_formatted_error += " for argument '";
+		m_formatted_error += m_error.arg_name;
+		m_formatted_error += "'";
+
+		append_detail();
+		m_formatted_error += '.';
+		break;
+	}
+
+	case Parser::Error::MISSING_VALUE:
+	{
+		m_formatted_error =
+			"Error: argument '" +
+			m_error.arg_name +
+			"' requires a value.";
+		break;
+	}
+
+	case Parser::Error::UNKNOWN_ARGUMENT:
+	{
+		m_formatted_error = "Error: unknown argument";
+		m_formatted_error += " '";
+		m_formatted_error += m_error.arg_name;
+		m_formatted_error += "'";
+		m_formatted_error += '.';
+		break;
+	}
+
+	case Parser::Error::CARDINALITY_VALIDATION_FAIL:
+	{
+		m_formatted_error =
+			"Error: argument '" +
+			m_error.arg_name +
+			"' ";
+
+		switch (m_error.aggregate.card)
+		{
+		case Cardinality::EXACTLY:
+			m_formatted_error +=
+				"expects exactly " +
+				std::to_string(m_error.aggregate.count) +
+				" values";
+			break;
+
+		case Cardinality::ATLEAST:
+			m_formatted_error +=
+				"expects at least " +
+				std::to_string(m_error.aggregate.min) +
+				" values";
+			break;
+
+		case Cardinality::ATMOST:
+			m_formatted_error +=
+				"accepts at most " +
+				std::to_string(m_error.aggregate.max) +
+				" values";
+			break;
+
+		case Cardinality::BETWEEN:
+			m_formatted_error +=
+				"expects between " +
+				std::to_string(m_error.aggregate.min) +
+				" and " +
+				std::to_string(m_error.aggregate.max) +
+				" values";
+			break;
+
+		case Cardinality::UNLIMITED:
+			// Reaching this state indicates an internal inconsistency.
+			m_formatted_error +=
+				"has invalid aggregate cardinality";
+			break;
+		}
+
+		m_formatted_error +=
+			", but received " +
+			std::to_string(m_error.aggregate.received_count) +
+			'.';
+
+		break;
+	}
+
+	case Parser::Error::FLAG_HAS_EQUALS_VALUE:
+	{
+		m_formatted_error =
+			"Error: flag '" +
+			m_error.arg_name +
+			"' does not accept a value.";
+
+		break;
+	}
+
+	default:
+	{
+		m_formatted_error = "Error: an unknown command-line error occurred.";
+		break;
+	}
+	}
+
+	std::cout << m_formatted_error << std::endl;
 }
 
 void Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al)
@@ -354,7 +590,7 @@ Parser::Flag& Parser::Flag::Help(std::string_view help_msg)
 	return *this;
 }
 
-void Parser::Flag::Finalize()
+void Parser::Flag::Finalize(Diagnostic& d)
 {
 	if (m_locked || m_error != Error::SUCCESS)
 		return;
@@ -368,37 +604,37 @@ void Parser::Flag::SetTrue()
 		m_state = true;
 }
 
-bool Parser::Parse(std::string_view v, int64_t& out)
+Parser::Result Parser::Parse(std::string_view v, int64_t& out)
 {
 	return Parser::ParseInteger(v, out);
 }
 
-bool Parser::Parse(std::string_view v, uint64_t& out)
+Parser::Result Parser::Parse(std::string_view v, uint64_t& out)
 {
 	return Parser::ParseInteger(v, out);
 }
 
-bool Parser::Parse(std::string_view v, int32_t& out)
+Parser::Result Parser::Parse(std::string_view v, int32_t& out)
 {
 	return Parser::ParseInteger(v, out);
 }
 
-bool Parser::Parse(std::string_view v, uint32_t& out)
+Parser::Result Parser::Parse(std::string_view v, uint32_t& out)
 {
 	return Parser::ParseInteger(v, out);
 }
 
-bool Parser::Parse(std::string_view v, int16_t& out)
+Parser::Result Parser::Parse(std::string_view v, int16_t& out)
 {
 	return Parser::ParseInteger(v, out);
 }
 
-bool Parser::Parse(std::string_view v, uint16_t& out)
+Parser::Result Parser::Parse(std::string_view v, uint16_t& out)
 {
 	return Parser::ParseInteger(v, out);
 }
 
-bool Parser::Parse(std::string_view v, int8_t& out)
+Parser::Result Parser::Parse(std::string_view v, int8_t& out)
 {
 	int16_t value{};
 
@@ -406,41 +642,41 @@ bool Parser::Parse(std::string_view v, int8_t& out)
 		value < INT8_MIN ||
 		value > INT8_MAX)
 	{
-		return false;
+		return Parser::Result::Failure("result out of range");
 	}
 
 	out = static_cast<int8_t>(value);
-	return true;
+	return Parser::Result::Success();
 }
 
-bool Parser::Parse(std::string_view v, uint8_t& out)
+Parser::Result Parser::Parse(std::string_view v, uint8_t& out)
 {
 	uint16_t value{};
 
 	if (!Parser::ParseInteger(v, value) || value > UINT8_MAX)
-		return false;
+		return Parser::Result::Failure("result out of range");
 
 	out = static_cast<uint8_t>(value);
-	return true;
+	return Parser::Result::Success();
 }
 
-bool Parser::Parse(std::string_view v, double& out)
+Parser::Result Parser::Parse(std::string_view v, double& out)
 {
 	return Parser::ParseFloatingPoint(v, out);
 }
 
-bool Parser::Parse(std::string_view v, long double& out)
+Parser::Result Parser::Parse(std::string_view v, long double& out)
 {
 	return Parser::ParseFloatingPoint(v, out);
 }
 
-bool Parser::Parse(std::string_view v, float& out)
+Parser::Result Parser::Parse(std::string_view v, float& out)
 {
 	return Parser::ParseFloatingPoint(v, out);
 }
 
-bool Parser::Parse(std::string_view v, std::string& out)
+Parser::Result Parser::Parse(std::string_view v, std::string& out)
 {
 	out.assign(v.data(), v.size());
-	return true;
+	return Parser::Result::Success();
 }
