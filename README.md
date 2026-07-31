@@ -1,6 +1,6 @@
-# ArgParser
+# ArgParser : A C++20 command-line parsing library
 
-ArgParser is a C++20 command-line parsing library with typed values, positional arguments, flags, repeated-value aggregates, validation, transformation, structured diagnostics, and generated help.
+ArgParser is a modern command-line parsing library with typed values, positional arguments, flags, repeated-value aggregates, validation, transformation, structured diagnostics, and generated help.
 
 The library is configured through a fluent API and parses directly from `argc` and `argv`. It has no external runtime dependencies.
 
