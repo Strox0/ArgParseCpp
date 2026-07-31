@@ -12,6 +12,7 @@
 #include <concepts>
 #include <utility>
 #include <unordered_map>
+#include <map>
 #include <stdexcept>
 
 namespace Parser
@@ -53,6 +54,7 @@ namespace Parser
 		std::string arg_name;
 		std::string opt_token;
 		std::string opt_error_message;
+		bool positional = false;
 		struct Aggregate
 		{
 			size_t count = 0;
@@ -129,6 +131,8 @@ namespace Parser
 		void AddName(std::string_view name);
 		void AddAliases(const std::vector<std::string>& aliases);
 		std::string_view GetName() const;
+		std::string_view GetMeta() const;
+		bool IsRequired() const;
 		const std::vector<std::string>& GetAliases() const;
 
 	protected:
@@ -144,6 +148,7 @@ namespace Parser
 		bool m_locked = false;
 		std::string m_value;
 		std::string m_name;
+		std::string m_meta;
 		std::vector<std::string> m_aliases;
 	};
 
@@ -177,6 +182,7 @@ namespace Parser
 		Argument<T>& Required();
 		Argument<T>& Default(const T& default_value);
 		Argument<T>& Help(std::string_view help_msg);
+		Argument<T>& Meta(std::string_view meta_var_name);
 
 	protected:
 		void Finalize(Diagnostic& d) override;
@@ -248,6 +254,7 @@ namespace Parser
 		Aggregate<T>& Required();
 		Aggregate<T>& Default(const std::vector<T>& default_value);
 		Aggregate<T>& Help(std::string_view help_msg);
+		Aggregate<T>& Meta(std::string_view meta_var_name);
 
 		Aggregate<T>& Exactly(size_t count);
 		Aggregate<T>& Between(size_t min, size_t max);
@@ -302,11 +309,15 @@ namespace Parser
 
 		Flag& AddFlag(const std::string& name, const std::vector<std::string>& aliases = {});
 
+		template <typename T>
+		Aggregate<T>& AddPositionalAggregate(const std::string& helper_name);
+
 		void Help(std::string_view help_msg);
 
 		ArgParseResult ParseAndValidate();
 		const Diagnostic& GetDiagnostics() const;
 		std::string GetErrorMessage() const;
+		std::string GetHelpMessage(size_t max_line_width = 80, size_t max_lable_width = 32);
 
 	private:
 		void FormatError();
@@ -326,11 +337,13 @@ namespace Parser
 
 		std::vector<std::shared_ptr<ArgumentBase>> m_args;
 		std::vector<std::unique_ptr<ArgumentBase>> m_positionals;
+		std::unique_ptr<ArgumentBase> m_pos_aggregate;
 		std::vector<std::string> m_tokens;
 		Diagnostic m_error;
 		std::string m_formatted_error;
 		std::string m_help;
-		std::unordered_map<std::string, std::pair<ArgType,std::shared_ptr<ArgumentBase>>> m_name_arg_map;
+		std::string m_exe_name;
+		std::map<std::string, std::pair<ArgType,std::shared_ptr<ArgumentBase>>> m_name_arg_map;
 		std::unordered_map<std::string, std::string> m_alias_map;
 		bool m_locked = false;
 	};
@@ -372,6 +385,20 @@ namespace Parser
 		m_args.back()->AddName(name);
 		m_args.back()->AddAliases(aliases);
 		return *(Aggregate<T>*)m_args.back().get();
+	}
+
+	template<typename T>
+	inline Aggregate<T>& ArgParser::AddPositionalAggregate(const std::string& helper_name)
+	{
+		if (m_locked)
+			throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
+		if (m_pos_aggregate)
+			throw std::logic_error("There cannot be two positional aggregates");
+
+		m_pos_aggregate = std::make_unique<Aggregate<T>>();
+		m_pos_aggregate->AddName(helper_name);
+		return *(Aggregate<T>*)m_pos_aggregate.get();
 	}
 
 	template<Parseable T>
@@ -514,13 +541,17 @@ namespace Parser
 		if (m_locked)
 			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
-		if (help_msg.empty())
-			throw std::logic_error("Help message cannot be empty");
-
 		m_help = help_msg;
-		if (m_help.back() != '\n')
-			m_help += '\n';
 		return *this;
+	}
+
+	template<Parseable T>
+	inline Argument<T>& Argument<T>::Meta(std::string_view meta_var_name)
+	{
+		if (m_locked)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+
+		m_meta = meta_var_name;
 	}
 
 	template<Parseable T>
@@ -750,13 +781,17 @@ namespace Parser
 		if (m_locked)
 			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
-		if (help_msg.empty())
-			throw std::logic_error("Help message cannot be empty");
-
 		m_help = help_msg;
-		if (m_help.back() != '\n')
-			m_help += '\n';
 		return *this;
+	}
+
+	template<Parseable T>
+	inline Aggregate<T>& Aggregate<T>::Meta(std::string_view meta_var_name)
+	{
+		if (m_locked)
+			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+
+		m_meta = meta_var_name;
 	}
 
 	template<Parseable T>

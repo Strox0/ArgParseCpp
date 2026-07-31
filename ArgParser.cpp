@@ -8,9 +8,14 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <sstream>
+#include <cstddef>
+#include <iomanip>
+#include <utility>
 
 Parser::ArgParser::ArgParser(int argc, char** argv)
 {
+	m_exe_name = argv[0];
 	for (size_t i = 1; i < argc; i++)
 	{
 		m_tokens.emplace_back(argv[i]);
@@ -55,13 +60,19 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 		return ArgParseResult::ERROR;
 	}
 
-	bool m_pos_req = true;
+	bool disallow_req = false;
 	for (auto& arg : m_positionals)
 	{
-		if (m_pos_req && !arg->m_required)
-			m_pos_req = false;
-		else if (!m_pos_req && arg->m_required)
+		if (m_pos_aggregate)
+		{
+			if (m_pos_aggregate->IsRequired() && !arg->IsRequired())
+				throw std::logic_error("A Required positional cannot be after an optional one");
+		}
+
+		if (disallow_req && arg->IsRequired())
 			throw std::logic_error("A Required positional cannot be after an optional one");
+		else if (!arg->IsRequired())
+			disallow_req = true;
 	}
 
 	size_t positionals_index = 0;
@@ -184,6 +195,10 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 				m_positionals[positionals_index]->AddValue(token);
 				positionals_index++;
 			}
+			else if (m_pos_aggregate)
+			{
+				m_pos_aggregate->AppendValue(token);
+			}
 			else
 			{
 				m_error.ec = Error::UNKNOWN_ARGUMENT;
@@ -198,6 +213,10 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 			{
 				m_positionals[positionals_index]->AddValue(token);
 				positionals_index++;
+			}
+			else if (m_pos_aggregate)
+			{
+				m_pos_aggregate->AppendValue(token);
 			}
 			else
 			{
@@ -214,6 +233,18 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 		arg->Finalize(m_error);
 		if (m_error)
 		{
+			m_error.positional = true;
+			FormatError();
+			return ArgParseResult::ERROR;
+		}
+	}
+
+	if (m_pos_aggregate)
+	{
+		m_pos_aggregate->Finalize(m_error);
+		if (m_error)
+		{
+			m_error.positional = true;
 			FormatError();
 			return ArgParseResult::ERROR;
 		}
@@ -235,6 +266,366 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 std::string Parser::ArgParser::GetErrorMessage() const
 {
 	return m_formatted_error;
+}
+
+std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_lable_width)
+{
+	if (!m_locked)
+		throw std::logic_error("GetHelpMessage cannot be called before ParseAndValidate");
+
+	struct HelpRow
+	{
+		std::string label;
+		std::string description;
+	};
+
+	struct OptionRow
+	{
+		std::string canonical_name;
+		HelpRow help;
+	};
+
+	const auto wrap_text = [](std::string_view text, std::size_t width)
+		{
+			std::vector<std::string> result;
+			std::size_t paragraph_begin = 0;
+
+			while (paragraph_begin <= text.size())
+			{
+				const std::size_t newline = text.find('\n', paragraph_begin);
+				const std::size_t paragraph_end = newline == std::string_view::npos ? text.size() : newline;
+
+				const std::string_view paragraph = text.substr(paragraph_begin, paragraph_end - paragraph_begin);
+
+				std::istringstream words{ std::string(paragraph) };
+				std::string word;
+				std::string line;
+
+				while (words >> word)
+				{
+					if (line.empty())
+					{
+						line = word;
+					}
+					else if (line.size() + 1 + word.size() <= width)
+					{
+						line += ' ';
+						line += word;
+					}
+					else
+					{
+						result.push_back(std::move(line));
+						line = word;
+					}
+				}
+
+				if (!line.empty())
+				{
+					result.push_back(std::move(line));
+				}
+				else if (paragraph.empty())
+				{
+					result.emplace_back();
+				}
+
+				if (newline == std::string_view::npos)
+				{
+					break;
+				}
+
+				paragraph_begin = newline + 1;
+			}
+
+			return result;
+		};
+
+	const auto format_meta = [](const ArgumentBase& argument, std::string_view fallback)
+		{
+			std::string meta = argument.GetMeta().empty() ? std::string(fallback) : std::string(argument.GetMeta());
+
+			if (meta.size() >= 2 &&
+				meta.front() == '<' &&
+				meta.back() == '>')
+			{
+				return meta;
+			}
+			else
+			{
+				meta.insert(meta.begin(), '<');
+				meta.push_back('>');
+			}
+
+			return meta;
+		};
+
+	const auto make_description = [](const ArgumentBase& argument)
+		{
+			std::string description{ argument.GetHelp() };
+
+			if (argument.IsRequired())
+			{
+				if (!description.empty())
+				{
+					description += ' ';
+				}
+
+				description += "(required)";
+			}
+
+			return description;
+		};
+
+	const auto make_option_label = [](const std::string& name, const ArgumentBase& argument)
+		{
+			std::string label = name;
+
+			for (const std::string& alias : argument.GetAliases())
+			{
+				label += ", ";
+				label += alias;
+			}
+
+			return label;
+		};
+
+	const auto append_rows = [&](std::ostringstream& output, const std::vector<HelpRow>& rows)
+		{
+			if (rows.empty())
+			{
+				return;
+			}
+
+			constexpr std::size_t indent = 2;
+			constexpr std::size_t gap = 2;
+
+			std::size_t label_width = 0;
+
+			for (const HelpRow& row : rows)
+			{
+				label_width = std::max(label_width, row.label.size());
+			}
+
+			label_width = std::min(label_width, max_lable_width);
+
+			const std::size_t description_column = indent + label_width + gap;
+
+			const std::size_t description_width = description_column < max_line_width ? max_line_width - description_column	: 1;
+
+			for (const HelpRow& row : rows)
+			{
+				if (row.description.empty())
+				{
+					output << std::string(indent, ' ') << row.label << '\n';
+					continue;
+				}
+
+				const std::vector<std::string> description_lines = wrap_text(row.description, description_width);
+
+				if (row.label.size() <= label_width)
+				{
+					output
+						<< std::string(indent, ' ')
+						<< std::left
+						<< std::setw(static_cast<int>(label_width))
+						<< row.label
+						<< std::right
+						<< std::string(gap, ' ');
+
+					if (!description_lines.empty())
+					{
+						output << description_lines.front();
+					}
+
+					output << '\n';
+				}
+				else
+				{
+					output << std::string(indent, ' ') << row.label << '\n';
+
+					if (!description_lines.empty())
+					{
+						output << std::string(description_column, ' ') << description_lines.front()	<< '\n';
+					}
+				}
+
+				for (std::size_t i = 1; i < description_lines.size(); ++i)
+				{
+					output << std::string(description_column, ' ') << description_lines[i] << '\n';
+				}
+			}
+		};
+
+	std::vector<std::string> required_options;
+	std::vector<std::string> optional_options;
+	std::vector<OptionRow> option_rows;
+
+	optional_options.emplace_back("[--help]");
+	option_rows.push_back({
+		"--help",
+		{
+			"--help, -h",
+			"Show this help message."
+		}
+		});
+
+	for (const auto& [canonical_name, typed_argument] : m_name_arg_map)
+	{
+		const ArgType type = typed_argument.first;
+		const ArgumentBase& argument = *typed_argument.second;
+
+		std::string usage = canonical_name;
+		std::string label = make_option_label(canonical_name, argument);
+
+		if (type != ArgType::Flag)
+		{
+			const std::string meta = format_meta(argument, "value");
+
+			usage += ' ';
+			usage += meta;
+
+			label += ' ';
+			label += meta;
+
+			if (type == ArgType::Aggregate)
+			{
+				usage += "...";
+				label += "...";
+			}
+		}
+
+		if (argument.IsRequired())
+		{
+			required_options.push_back(std::move(usage));
+		}
+		else
+		{
+			optional_options.push_back("[" + usage + "]");
+		}
+
+		option_rows.push_back({
+			canonical_name,
+			{
+				std::move(label),
+				make_description(argument)
+			}
+			});
+	}
+
+	std::vector<std::string> usage_parts;
+
+	usage_parts.reserve(required_options.size() + optional_options.size() + m_positionals.size() + (m_pos_aggregate ? 1 : 0));
+
+	usage_parts.insert(usage_parts.end(), required_options.begin(),	required_options.end());
+	usage_parts.insert(usage_parts.end(), optional_options.begin(),	optional_options.end());
+
+	// Preserve positional declaration order.
+	for (const std::unique_ptr<ArgumentBase>& positional : m_positionals)
+	{
+		std::string token =	format_meta(*positional, positional->GetName());
+
+		if (!positional->IsRequired())
+		{
+			token = "[" + token + "]";
+		}
+
+		usage_parts.push_back(std::move(token));
+	}
+
+	if (m_pos_aggregate)
+	{
+		std::string token =	format_meta(*m_pos_aggregate, m_pos_aggregate->GetName());
+		token += "...";
+
+		if (!m_pos_aggregate->IsRequired())
+		{
+			token = "[" + token + "]";
+		}
+
+		usage_parts.push_back(std::move(token));
+	}
+
+	std::ostringstream output;
+
+	const std::string executable = m_exe_name.empty() ? "<program>"	: m_exe_name;
+
+	const std::string usage_prefix = "Usage: " + executable;
+
+	output << usage_prefix;
+
+	std::size_t current_column = usage_prefix.size();
+
+	// Align continued lines underneath the text after "Usage:".
+	constexpr std::size_t continuation_indent = sizeof("Usage: ") - 1;
+
+	for (const std::string& part : usage_parts)
+	{
+		if (current_column + 1 + part.size() > max_line_width)
+		{
+			output << '\n' << std::string(continuation_indent, ' ');
+			current_column = continuation_indent;
+		}
+
+		output << ' ' << part;
+		current_column += 1 + part.size();
+	}
+
+	output << "\n\n";
+
+	// Application-level description.
+	if (!m_help.empty())
+	{
+		const std::vector<std::string> description_lines = wrap_text(m_help, max_line_width);
+
+		for (const std::string& line : description_lines)
+		{
+			output << line << '\n';
+		}
+
+		output << '\n';
+	}
+
+	std::vector<HelpRow> positional_rows;
+
+	positional_rows.reserve(m_positionals.size() + (m_pos_aggregate ? 1 : 0));
+
+	for (const std::unique_ptr<ArgumentBase>& positional : m_positionals)
+	{
+		positional_rows.push_back({
+			std::string(positional->GetName()),
+			make_description(*positional)
+			});
+	}
+
+	if (m_pos_aggregate)
+	{
+		positional_rows.push_back({
+			std::string(m_pos_aggregate->GetName()) + "...",
+			make_description(*m_pos_aggregate)
+			});
+	}
+
+	if (!positional_rows.empty())
+	{
+		output << "Positional arguments:\n";
+		append_rows(output, positional_rows);
+		output << '\n';
+	}
+
+	if (!option_rows.empty())
+	{
+		std::vector<HelpRow> rows;
+		rows.reserve(option_rows.size());
+
+		for (OptionRow& option : option_rows)
+		{
+			rows.push_back(std::move(option.help));
+		}
+
+		output << "Options:\n";
+		append_rows(output, rows);
+	}
+
+	return output.str();
 }
 
 const Parser::Diagnostic& Parser::ArgParser::GetDiagnostics() const
@@ -454,7 +845,6 @@ void Parser::ArgParser::FormatError()
 		break;
 	}
 	}
-	std::cout << m_formatted_error << std::endl;
 }
 
 void Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al)
@@ -556,6 +946,16 @@ void Parser::ArgumentBase::AddAliases(const std::vector<std::string>& aliases)
 std::string_view Parser::ArgumentBase::GetName() const
 {
 	return m_name;
+}
+
+std::string_view Parser::ArgumentBase::GetMeta() const
+{
+	return m_meta;
+}
+
+bool Parser::ArgumentBase::IsRequired() const
+{
+	return m_required;
 }
 
 const std::vector<std::string>& Parser::ArgumentBase::GetAliases() const
