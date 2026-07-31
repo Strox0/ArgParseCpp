@@ -569,13 +569,14 @@ namespace parser_tests
 		CHECK_EQ(count.Value(), std::int64_t{ 21 });
 	}
 
-	TEST(NamedStringEmptyEqualsSyntaxIsMissingValue)
+	TEST(NamedStringEmptyEqualsEmptyValue)
 	{
 		SimulatedArgv args{ "--name=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		auto& name = parser.Add<std::string>("--name");
 
-		CHECK_ERROR(parser, Error::MISSING_VALUE);
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(name.ValueRef().empty(), true);
 	}
 
 	TEST(OptionalArgumentWithoutDefaultIsNotProvided)
@@ -648,13 +649,13 @@ namespace parser_tests
 		CHECK_ERROR(parser, Error::PARSE_FAIL);
 	}
 
-	TEST(EmptyNumericRequiredEqualsSyntaxIsMissingValue)
+	TEST(EmptyNumericEqualsSyntaxIsParseError)
 	{
 		SimulatedArgv args{ "--count=" };
 		Parser::ArgParser parser(args.argc(), args.argv());
-		parser.Add<std::int64_t>("--count").Required();
+		parser.Add<std::int64_t>("--count");
 
-		CHECK_ERROR(parser, Error::MISSING_VALUE);
+		CHECK_ERROR(parser, Error::PARSE_FAIL);
 	}
 
 	TEST(OptionTerminatorIsNotConsumedAsScalarValue)
@@ -1427,7 +1428,7 @@ namespace parser_tests
 		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::HELP_REQUESTED);
 	}
 
-	TEST(HelpListsEveryArgumentKind)
+	TEST(HelpListsEveryArgumentKindPostParse)
 	{
 		SimulatedArgv args{ "--help" };
 		Parser::ArgParser parser(args.argc(), args.argv());
@@ -1449,6 +1450,66 @@ namespace parser_tests
 		CHECK(output.find("Scalar documentation.") != std::string::npos);
 		CHECK(output.find("INPUT") != std::string::npos);
 		CHECK(output.find("Positional documentation.") != std::string::npos);
+		CHECK(output.find("--items") != std::string::npos);
+		CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
+		CHECK(output.find("--verbose") != std::string::npos);
+		CHECK(output.find("-V_ALIAS") != std::string::npos);
+		CHECK(output.find("Flag documentation.") != std::string::npos);
+	}
+
+	TEST(HelpListsEveryArgumentKindPreParse)
+	{
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Help("Overview.");
+		parser.Add<std::string>("--output", { "-O_ALIAS" })
+			.Help("Scalar documentation.");
+		parser.AddPositional<std::string>("INPUT").Help("Positional documentation.");
+		parser.AddAggregate<std::string>("--items")
+			.Unlimited()
+			.Help("Aggregate documentation.");
+		parser.AddFlag("--verbose", { "-V_ALIAS" }).Help("Flag documentation.");
+
+		const std::string output = parser.GetHelpMessage();
+		CHECK(output.find("Overview.") != std::string::npos);
+		CHECK(output.find("--output") != std::string::npos);
+		CHECK(output.find("-O_ALIAS") != std::string::npos);
+		CHECK(output.find("Scalar documentation.") != std::string::npos);
+		CHECK(output.find("INPUT") != std::string::npos);
+		CHECK(output.find("Positional documentation.") != std::string::npos);
+		CHECK(output.find("--items") != std::string::npos);
+		CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
+		CHECK(output.find("--verbose") != std::string::npos);
+		CHECK(output.find("-V_ALIAS") != std::string::npos);
+		CHECK(output.find("Flag documentation.") != std::string::npos);
+	}
+
+	TEST(HelpUpdatesAlongWithNewArgsPreParse)
+	{
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		std::string output = parser.GetHelpMessage();
+		parser.Help("Overview.");
+		parser.Add<std::string>("--output", { "-O_ALIAS" })
+			.Help("Scalar documentation.");
+		parser.AddPositional<std::string>("INPUT").Help("Positional documentation.");
+
+		output = parser.GetHelpMessage();
+
+		CHECK(output.find("Overview.") != std::string::npos);
+		CHECK(output.find("--output") != std::string::npos);
+		CHECK(output.find("-O_ALIAS") != std::string::npos);
+		CHECK(output.find("Scalar documentation.") != std::string::npos);
+		CHECK(output.find("INPUT") != std::string::npos);
+		CHECK(output.find("Positional documentation.") != std::string::npos);
+
+		parser.AddAggregate<std::string>("--items")
+			.Unlimited().Help("Aggregate documentation.");
+		parser.AddFlag("--verbose", { "-V_ALIAS" }).Help("Flag documentation.");
+		parser.AddPositionalAggregate<int>("--integers").Required();
+
+		output = parser.GetHelpMessage();
+
 		CHECK(output.find("--items") != std::string::npos);
 		CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
 		CHECK(output.find("--verbose") != std::string::npos);
@@ -2261,8 +2322,6 @@ namespace parser_tests
 		CHECK_NEAR(floats.Value()[1], 2.0, 0.000001);
 		CHECK_NEAR(floats.Value()[2], 3.25, 0.000001);
 		CHECK_NEAR(floats.Value()[3], 4.0, 0.000001);
-
-		std::cout << parser.GetHelpMessage();
 	}
 } // namespace parser_tests
 
