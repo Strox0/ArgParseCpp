@@ -99,14 +99,6 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 				{
 				case Parser::ArgParser::ArgType::Scalar:
 				{
-					if (has_value && pair.second.empty())
-					{
-						m_error.ec = Error::MISSING_VALUE;
-						m_error.arg_name = original_arg_name;
-						FormatError();
-						return ArgParseResult::ERROR;
-					}
-
 					if (has_value)
 					{
 						arg.AddValue(pair.second);
@@ -138,14 +130,6 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 				}
 				case Parser::ArgParser::ArgType::Aggregate:
 				{
-					if (has_value && pair.second.empty())
-					{
-						m_error.ec = Error::MISSING_VALUE;
-						m_error.arg_name = original_arg_name;
-						FormatError();
-						return ArgParseResult::ERROR;
-					}
-
 					bool found_value = has_value;
 					if (has_value)
 					{
@@ -266,9 +250,6 @@ std::string Parser::ArgParser::GetErrorMessage() const
 
 std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_label_width) const
 {
-	if (!m_locked)
-		throw std::logic_error("GetHelpMessage cannot be called before ParseAndValidate");
-
 	struct HelpRow
 	{
 		std::string label;

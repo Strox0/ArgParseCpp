@@ -430,6 +430,9 @@ namespace Parser
 	template<Parseable T>
 	inline bool Argument<T>::Provided() const
 	{
+		if (!m_locked)
+			throw std::logic_error("Provided cannot be called before ParseAndValidate");
+
 		return m_set;
 	}
 
@@ -736,6 +739,9 @@ namespace Parser
 	template<Parseable T>
 	inline bool Aggregate<T>::Provided() const
 	{
+		if (!m_locked)
+			throw std::logic_error("Provided cannot be called before ParseAndValidate");
+
 		return m_set;
 	}
 
