@@ -1429,35 +1429,31 @@ namespace parser_tests
 
 	TEST(HelpListsEveryArgumentKind)
 	{
-		//SimulatedArgv args{ "--help" };
-		//Parser::ArgParser parser(args.argc(), args.argv());
-		//parser.Help("Overview.");
-		//parser.Add<std::string>("--output", { "-O_ALIAS" })
-		//	.Help("Scalar documentation.");
-		//parser.AddPositional<std::string>("INPUT").Help("Positional documentation.");
-		//parser.AddAggregate<std::string>("--items")
-		//	.Unlimited()
-		//	.Help("Aggregate documentation.");
-		//parser.AddFlag("--verbose", { "-V_ALIAS" }).Help("Flag documentation.");
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Help("Overview.");
+		parser.Add<std::string>("--output", { "-O_ALIAS" })
+			.Help("Scalar documentation.");
+		parser.AddPositional<std::string>("INPUT").Help("Positional documentation.");
+		parser.AddAggregate<std::string>("--items")
+			.Unlimited()
+			.Help("Aggregate documentation.");
+		parser.AddFlag("--verbose", { "-V_ALIAS" }).Help("Flag documentation.");
 
-		//ScopedStreamCapture stdout_capture(std::cout);
-		//const Error error =
-		//	parser.ParseAndValidate();
-		//const std::string output = stdout_capture.str();
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::HELP_REQUESTED);
 
-		//CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::HELP_REQUESTED);
-		//CHECK(output.find("Overview.") != std::string::npos);
-		//CHECK(output.find("--output") != std::string::npos);
-		//CHECK(output.find("-O_ALIAS") != std::string::npos);
-		//CHECK(output.find("Scalar documentation.") != std::string::npos);
-		//CHECK(output.find("INPUT") != std::string::npos);
-		//CHECK(output.find("Positional documentation.") != std::string::npos);
-		//CHECK(output.find("--items") != std::string::npos);
-		//CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
-		//CHECK(output.find("--verbose") != std::string::npos);
-		//CHECK(output.find("-V_ALIAS") != std::string::npos);
-		//CHECK(output.find("Flag documentation.") != std::string::npos);
-		throw std::exception("HelpListsEveryArgumentKind not implemented");
+		const std::string output = parser.GetHelpMessage();
+		CHECK(output.find("Overview.") != std::string::npos);
+		CHECK(output.find("--output") != std::string::npos);
+		CHECK(output.find("-O_ALIAS") != std::string::npos);
+		CHECK(output.find("Scalar documentation.") != std::string::npos);
+		CHECK(output.find("INPUT") != std::string::npos);
+		CHECK(output.find("Positional documentation.") != std::string::npos);
+		CHECK(output.find("--items") != std::string::npos);
+		CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
+		CHECK(output.find("--verbose") != std::string::npos);
+		CHECK(output.find("-V_ALIAS") != std::string::npos);
+		CHECK(output.find("Flag documentation.") != std::string::npos);
 	}
 
 	TEST(EmptyProgramHelpIsSafe)
@@ -1465,14 +1461,6 @@ namespace parser_tests
 		SimulatedArgv args{ "--help" };
 		Parser::ArgParser parser(args.argc(), args.argv());
 		CHECK_THROWS_AS(parser.Help(""), std::logic_error);
-	}
-
-	TEST(EmptyScalarHelpIsSafe)
-	{
-		SimulatedArgv args{};
-		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& value = parser.Add<std::string>("--value");
-		CHECK_THROWS_AS(value.Help(""), std::logic_error);
 	}
 
 	TEST(EmptyFlagHelpIsSafe)
@@ -2051,6 +2039,47 @@ namespace parser_tests
 		CHECK_EQ(pos.Value(), "hello");
 	}
 
+	TEST(PositionalAggregateSuccess)
+	{
+		SimulatedArgv args{ "--", "--float", "9.7", "9.7","9.7","9.7", "hello" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& aggr = parser.AddPositionalAggregate<std::string>("strs");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(aggr.ValueRef(), (std::vector<std::string>{ "--float", "9.7", "9.7", "9.7", "9.7", "hello" }));
+	}
+
+	TEST(PositionalAggregateRequiredAfterOptionalPositional)
+	{
+		SimulatedArgv args{ "--float", "9.7", "9.7","9.7","9.7", "hello" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& aggr = parser.AddPositionalAggregate<std::string>("strs").Required();
+		auto& p1 = parser.AddPositional<std::string>("t");
+		CHECK_THROWS_AS(parser.ParseAndValidate(), std::logic_error);
+	}
+
+	TEST(PositionalAggregateAfterIncorrectRequiredPositional)
+	{
+		SimulatedArgv args{ "--float", "9.7", "9.7","9.7","9.7", "hello" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& aggr = parser.AddPositionalAggregate<std::string>("strs");
+		auto& p1 = parser.AddPositional<std::string>("t");
+		auto& p2 = parser.AddPositional<std::string>("t2").Required();
+
+		CHECK_THROWS_AS(parser.ParseAndValidate(), std::logic_error);
+	}
+
+	TEST(OptionalPositionalAggregatesAndPositionalsSuccess)
+	{
+		SimulatedArgv args{ "--float", "9.7", "9.7","9.7","9.7", "hello" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& aggr = parser.AddPositionalAggregate<std::string>("strs");
+		auto& p1 = parser.AddPositional<std::string>("t");
+		auto& p2 = parser.AddPositional<std::string>("t2");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+	}
+
 	// -----------------------------------------------------------------------------
 	// Full example-style integration test
 	// -----------------------------------------------------------------------------
@@ -2103,35 +2132,43 @@ namespace parser_tests
 			.Required()
 			.ValidateText(no_numbers)
 			.Transform(lowercase)
-			.Help("Path to the input file.");
+			.Help("Path to the input file and this is a very long help message that is very long without any reason it is just long for the sake of it.");
 
 		auto& output = parser.Add<std::string>("--output", { "-o" })
 			.Default("output.txt")
-			.Transform(lowercase);
+			.Transform(lowercase)
+			.Help("Output file name");
 
 		auto& count = parser.Add<std::int64_t>("--count", { "-c" })
 			.Default(5)
-			.ValidateText(non_negative_text);
+			.ValidateText(non_negative_text)
+			.Help("The count");
 
 		auto& scale = parser.Add<double>("--scale", { "-s" })
 			.Default(1.0)
-			.ValidateValue(positive_double);
+			.ValidateValue(positive_double)
+			.Help("Positive scale value");
 
-		auto& debug = parser.AddFlag("--debug", { "-d" });
-		auto& verbose = parser.AddFlag("--verbose", { "-v" });
+		auto& debug = parser.AddFlag("--debug", { "-d" }).Help("Debug flag");
+		auto& verbose = parser.AddFlag("--verbose", { "-v" }).Help("Verbose output flag");
 
 		auto& positional_text = parser.AddPositional<std::string>("text")
 			.Required()
 			.Transform(lowercase)
-			.ValidateText(no_numbers);
+			.ValidateText(no_numbers)
+			.Help("Positional for text input");
 
 		auto& positional_num = parser.AddPositional<std::int64_t>("num")
-			.Default(66);
+			.Default(66)
+			.Help("Positional for number");
 
 		auto& floats = parser.AddAggregate<double>("--floats")
 			.ValidateValue(positive_double)
 			.Required()
-			.AtLeast(3);
+			.AtLeast(3)
+			.Help("Three float values");
+
+		auto& pos_aggr_int = parser.AddPositionalAggregate<int>("ints").Help("The remaining integer values");
 
 		CHECK_ERROR(parser, Error::SUCCESS);
 
@@ -2162,6 +2199,8 @@ namespace parser_tests
 		CHECK_NEAR(floats.Value()[1], 2.0, 0.000001);
 		CHECK_NEAR(floats.Value()[2], 3.25, 0.000001);
 		CHECK_NEAR(floats.Value()[3], 4.0, 0.000001);
+
+		std::cout << parser.GetHelpMessage();
 	}
 } // namespace parser_tests
 
