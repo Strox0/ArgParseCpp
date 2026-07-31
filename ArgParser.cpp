@@ -40,12 +40,7 @@ void Parser::ArgParser::Help(std::string_view v)
 	if (m_locked)
 		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
 
-	if (v.empty())
-		throw std::logic_error("Help message cannot be empty");
-
 	m_help = v;
-	if (m_help.back() != '\n')
-		m_help += '\n';
 }
 
 Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
@@ -89,6 +84,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 			}
 			else if (token == "--help" || token == "-h")
 			{
+				LockAndFailArgs();
 				return ArgParseResult::HELP_REQUESTED;
 			}
 
@@ -268,7 +264,7 @@ std::string Parser::ArgParser::GetErrorMessage() const
 	return m_formatted_error;
 }
 
-std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_lable_width)
+std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_label_width) const
 {
 	if (!m_locked)
 		throw std::logic_error("GetHelpMessage cannot be called before ParseAndValidate");
@@ -405,7 +401,7 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 				label_width = std::max(label_width, row.label.size());
 			}
 
-			label_width = std::min(label_width, max_lable_width);
+			label_width = std::min(label_width, max_label_width);
 
 			const std::size_t description_column = indent + label_width + gap;
 
@@ -635,6 +631,7 @@ const Parser::Diagnostic& Parser::ArgParser::GetDiagnostics() const
 
 void Parser::ArgParser::FormatError()
 {
+	LockAndFailArgs();
 	m_formatted_error.clear();
 
 	const auto append_detail = [this]()
@@ -847,6 +844,27 @@ void Parser::ArgParser::FormatError()
 	}
 }
 
+void Parser::ArgParser::LockAndFailArgs()
+{
+	for (auto& arg : m_positionals)
+	{
+		arg->Lock();
+		arg->m_success = false;
+	}
+
+	for (auto& arg : m_args)
+	{
+		arg->Lock();
+		arg->m_success = false;
+	}
+
+	if (m_pos_aggregate)
+	{
+		m_pos_aggregate->Lock();
+		m_pos_aggregate->m_success = false;
+	}
+}
+
 void Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al)
 {
 	if (name.empty())
@@ -963,6 +981,11 @@ const std::vector<std::string>& Parser::ArgumentBase::GetAliases() const
 	return m_aliases;
 }
 
+void Parser::ArgumentBase::Lock()
+{
+	m_locked = true;
+}
+
 void Parser::ArgumentBase::AddValue(std::string_view value)
 {
 	if (m_required && m_error == Error::MISSING_REQUIRED)
@@ -974,6 +997,9 @@ void Parser::ArgumentBase::AddValue(std::string_view value)
 
 bool Parser::Flag::Value() const
 {
+	if (!m_locked || !m_success)
+		throw std::logic_error("Value called in an invalid state");
+
 	return m_state;
 }
 
@@ -982,21 +1008,17 @@ Parser::Flag& Parser::Flag::Help(std::string_view help_msg)
 	if (m_locked)
 		throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
-	if (help_msg.empty())
-		throw std::logic_error("Help message cannot be empty");
-
 	m_help = help_msg;
-	if (m_help.back() != '\n')
-		m_help += '\n';
 	return *this;
 }
 
 void Parser::Flag::Finalize(Diagnostic& d)
 {
-	if (m_locked || m_error != Error::SUCCESS)
+	if (m_locked)
 		return;
 
 	m_locked = true;
+	m_success = true;
 }
 
 void Parser::Flag::SetTrue()

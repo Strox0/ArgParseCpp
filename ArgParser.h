@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <map>
 #include <stdexcept>
+#include <cstddef>
 
 namespace Parser
 {
@@ -134,6 +135,7 @@ namespace Parser
 		std::string_view GetMeta() const;
 		bool IsRequired() const;
 		const std::vector<std::string>& GetAliases() const;
+		void Lock();
 
 	protected:
 		virtual void Finalize(Diagnostic& diagnostic) = 0;
@@ -146,6 +148,7 @@ namespace Parser
 		bool m_set = false;
 		bool m_has_default = false;
 		bool m_locked = false;
+		bool m_success = false;
 		std::string m_value;
 		std::string m_name;
 		std::string m_meta;
@@ -317,10 +320,11 @@ namespace Parser
 		ArgParseResult ParseAndValidate();
 		const Diagnostic& GetDiagnostics() const;
 		std::string GetErrorMessage() const;
-		std::string GetHelpMessage(size_t max_line_width = 80, size_t max_lable_width = 32);
+		std::string GetHelpMessage(size_t max_line_width = 80, size_t max_label_width = 32) const;
 
 	private:
 		void FormatError();
+		void LockAndFailArgs();
 		void CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al);
 		bool IsKnownName(const std::string& name);
 		bool ResolveName(std::string& name);
@@ -368,6 +372,9 @@ namespace Parser
 		if (m_locked)
 			throw std::logic_error("No configuration functions can be called after ParseAndValidate");
 
+		if (helper_name.empty())
+			throw std::logic_error("Helper name cannot be empty");
+
 		m_positionals.emplace_back(std::make_unique<Argument<T>>());
 		m_positionals.back()->AddName(helper_name);
 		return *(Argument<T>*)m_positionals.back().get();
@@ -392,6 +399,9 @@ namespace Parser
 	{
 		if (m_locked)
 			throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
+		if (helper_name.empty())
+			throw std::logic_error("Helper name cannot be empty");
 
 		if (m_pos_aggregate)
 			throw std::logic_error("There cannot be two positional aggregates");
@@ -426,7 +436,7 @@ namespace Parser
 	template<Parseable T>
 	inline T Argument<T>::Value() const
 	{
-		if (!m_locked || m_error != Error::SUCCESS)
+		if (!m_locked || !m_success)
 			throw std::logic_error("Value called in an invalid state");
 
 		return m_parsed_val;
@@ -435,7 +445,7 @@ namespace Parser
 	template<Parseable T>
 	inline const T& Argument<T>::ValueRef() const
 	{
-		if (!m_locked || m_error != Error::SUCCESS)
+		if (!m_locked || !m_success)
 			throw std::logic_error("ValueRef called in an invalid state");
 
 		return m_parsed_val;
@@ -445,11 +455,11 @@ namespace Parser
 	inline T Argument<T>::ValueOr(const T& backup_val) const
 	{
 		if (!m_locked)
-			throw std::logic_error("ValueOr called before ParseAndValidate");
+			throw std::logic_error("ValueOr cannot be called before ParseAndValidate");
 
-		if (m_set && m_error == Error::SUCCESS)
+		if (m_set && m_success)
 			return m_parsed_val;
-		else if (m_has_default)
+		else if (m_has_default && m_success)
 			return m_default_val;
 		else
 			return backup_val;
@@ -552,6 +562,7 @@ namespace Parser
 			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_meta = meta_var_name;
+		return *this;
 	}
 
 	template<Parseable T>
@@ -630,6 +641,7 @@ namespace Parser
 				return;
 			}
 		}
+		m_success = true;
 	}
 
 	template <typename T>
@@ -730,7 +742,7 @@ namespace Parser
 	template<Parseable T>
 	inline std::vector<T> Aggregate<T>::Value() const
 	{
-		if (!m_locked || m_error != Error::SUCCESS)
+		if (!m_locked || !m_success)
 			throw std::logic_error("Value called in an invalid state");
 
 		return m_parsed_vals;
@@ -739,7 +751,7 @@ namespace Parser
 	template<Parseable T>
 	inline const std::vector<T>& Aggregate<T>::ValueRef() const
 	{
-		if (!m_locked || m_error != Error::SUCCESS)
+		if (!m_locked || !m_success)
 			throw std::logic_error("ValueRef called in an invalid state");
 
 		return m_parsed_vals;
@@ -751,9 +763,9 @@ namespace Parser
 		if (!m_locked)
 			throw std::logic_error("ValueOr cannot be called before ParseAndValidate");
 
-		if (m_set && m_error == Error::SUCCESS)
+		if (m_set && m_success)
 			return m_parsed_vals;
-		else if (m_has_default)
+		else if (m_has_default && m_success)
 			return m_default_vals;
 		else
 			return backup_val;
@@ -792,6 +804,7 @@ namespace Parser
 			throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 		m_meta = meta_var_name;
+		return *this;
 	}
 
 	template<Parseable T>
@@ -936,7 +949,10 @@ namespace Parser
 			return;
 		}
 		else
+		{
+			m_success = true;
 			return;
+		}
 
 		m_error = ApplyCardinality(d);
 		if (m_error != Error::SUCCESS)
@@ -976,6 +992,7 @@ namespace Parser
 				return;
 			}
 		}
+		m_success = true;
 	}
 
 	template<Parseable T>
