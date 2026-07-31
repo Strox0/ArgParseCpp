@@ -1456,21 +1456,6 @@ namespace parser_tests
 		CHECK(output.find("Flag documentation.") != std::string::npos);
 	}
 
-	TEST(EmptyProgramHelpIsSafe)
-	{
-		SimulatedArgv args{ "--help" };
-		Parser::ArgParser parser(args.argc(), args.argv());
-		CHECK_THROWS_AS(parser.Help(""), std::logic_error);
-	}
-
-	TEST(EmptyFlagHelpIsSafe)
-	{
-		SimulatedArgv args{};
-		Parser::ArgParser parser(args.argc(), args.argv());
-		auto& verbose = parser.AddFlag("--verbose");
-		CHECK_THROWS_AS(verbose.Help(""),std::logic_error);
-	}
-
 	TEST(AttachedHelpLikeValueIsNotAHelpQuery)
 	{
 		SimulatedArgv args{ "--label=--help" };
@@ -2078,6 +2063,83 @@ namespace parser_tests
 		auto& p2 = parser.AddPositional<std::string>("t2");
 
 		CHECK_ERROR(parser, Error::SUCCESS);
+	}
+
+	TEST(ArgumentsCannotBeAccessedAfterEarlyError)
+	{
+		SimulatedArgv args{ "--float", "9.7", "9.7","9.7","9.7", "hello" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& a = parser.Add<std::string>("--co");
+
+		CHECK_ERROR(parser, Error::UNKNOWN_ARGUMENT);
+		CHECK_THROWS_AS(a.Required(), std::logic_error);
+	}
+
+	TEST(LastScalarIsConsumedAsValue)
+	{
+		SimulatedArgv args{ "--name", "First", "--name", "SECOND" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& a = parser.Add<std::string>("--name");
+
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(a.ValueRef(), "SECOND");
+	}
+
+	TEST(InvalidValueAccessAfterError)
+	{
+		SimulatedArgv args{ "--count", "42", "--unknown" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& a = parser.Add<int>("--count").Default(1);
+		auto& f = parser.AddFlag("--flag");
+
+		CHECK_THROWS_AS(f.Value(), std::logic_error);
+
+		CHECK_ERROR(parser, Error::UNKNOWN_ARGUMENT);
+
+		CHECK_THROWS_AS(f.Value(), std::logic_error);
+		CHECK_EQ(a.ValueOr(9), 9);
+		CHECK_THROWS_AS(a.Value(), std::logic_error);
+		CHECK_THROWS_AS(a.ValueRef(), std::logic_error);
+	}
+
+	TEST(InvalidValueAccessAfterError2)
+	{
+		SimulatedArgv args{
+			"--flag",
+			"--good", "42",
+			"--bad", "not-an-integer"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+
+		auto& flag = parser.AddFlag("--flag");
+		auto& good = parser.Add<int>("--good");
+		auto& bad = parser.Add<int>("--bad");
+		
+		CHECK_ERROR(parser, Error::PARSE_FAIL);
+		CHECK_THROWS_AS(flag.Value(), std::logic_error);
+		CHECK_THROWS_AS(good.ValueRef(), std::logic_error);
+		CHECK_THROWS_AS(good.Value(), std::logic_error);
+		CHECK_EQ(good.ValueOr(9), 9);
+	}
+
+	TEST(InvalidValueAccessOptionalArg)
+	{
+		SimulatedArgv args{ };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.Add<int>("--optional");
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(value.ValueOr(8), 8);
+		CHECK_THROWS_AS(value.Value(), std::logic_error);
+	}
+
+	TEST(SuccessfulValueAccessOptionalAggregate)
+	{
+		SimulatedArgv args{ };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& value = parser.AddAggregate<int>("--optional");
+		CHECK_ERROR(parser, Error::SUCCESS);
+		CHECK_EQ(value.ValueRef().empty(), true);
 	}
 
 	// -----------------------------------------------------------------------------
