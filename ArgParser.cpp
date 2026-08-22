@@ -12,6 +12,8 @@
 #include <unordered_set>
 #include <ios>
 #include <stdexcept>
+#include <span>
+#include <initializer_list>
 
 Parser::ArgParser::ArgParser(int argc, char** argv)
 {
@@ -20,6 +22,12 @@ Parser::ArgParser::ArgParser(int argc, char** argv)
 	{
 		m_tokens.emplace_back(argv[i]);
 	}
+}
+
+Parser::ArgParser::ArgParser(const StopResult& stop_result)
+{
+	m_exe_name = stop_result.stop_token;
+	m_tokens.assign(stop_result.tokens.begin(), stop_result.tokens.end());
 }
 
 Parser::Flag& Parser::ArgParser::AddFlag(const std::string& name, const std::vector<std::string>& aliases)
@@ -41,6 +49,43 @@ void Parser::ArgParser::Help(std::string_view v)
 		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
 
 	m_help = v;
+}
+
+void Parser::ArgParser::StopAt(const std::string& token)
+{
+	if (m_locked)
+		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
+	if (token.empty())
+		throw std::logic_error("Stop token cannot be empty");
+
+	if (m_name_arg_map.contains(token) || token == "--help" || token == "-h" || token == "--" || m_alias_map.contains(token))
+		throw std::logic_error("Stop token conflicts with an already registered name");
+
+	if (token.find('=') != token.npos)
+		throw std::logic_error("Name contains '='");
+
+	m_name_arg_map[token] = std::make_pair(ArgType::StopToken, nullptr);
+}
+
+void Parser::ArgParser::StopAt(std::initializer_list<std::string> tokens)
+{
+	if (m_locked)
+		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
+
+	for (const auto& token : tokens)
+	{
+		if (token.empty())
+			throw std::logic_error("Stop token cannot be empty");
+
+		if (m_name_arg_map.contains(token) || token == "--help" || token == "-h" || token == "--" || m_alias_map.contains(token))
+			throw std::logic_error("Stop token conflicts with an already registered name");
+
+		if (token.find('=') != token.npos)
+			throw std::logic_error("Name contains '='");
+
+		m_name_arg_map[token] = std::make_pair(ArgType::StopToken, nullptr);
+	}
 }
 
 Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
@@ -72,6 +117,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 
 	size_t positionals_index = 0;
 	bool options_end = false;
+	bool stop_token_found = false;
 	for (auto curr = m_tokens.begin(); curr < m_tokens.end(); curr++)
 	{
 		const std::string& token = *curr;
@@ -93,9 +139,28 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 			std::string original_arg_name = pair.first;
 			if (ResolveName(pair.first))
 			{
-				ArgumentBase& arg = *m_name_arg_map.at(pair.first).second;
+				const auto& [arg_type, arg_ptr] = m_name_arg_map.at(pair.first);
+
+				if (arg_type == ArgType::StopToken)
+				{
+					if (has_value)
+					{
+						m_error.ec = Error::STOP_TOKEN_HAS_EQUALS_VALUE;
+						m_error.arg_name = original_arg_name;
+						FormatError();
+						return ArgParseResult::ERROR;
+					}
+
+					m_stop_result.stop_token = token;
+					curr++;
+					m_stop_result.tokens = std::span<std::string>(curr, m_tokens.end());
+					stop_token_found = true;
+					break;
+				}
+
+				ArgumentBase& arg = *arg_ptr;
 				arg.AddName(original_arg_name);
-				switch (m_name_arg_map.at(pair.first).first)
+				switch (arg_type)
 				{
 				case Parser::ArgParser::ArgType::Scalar:
 				{
@@ -240,7 +305,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 		}
 	}
 
-	return ArgParseResult::SUCCESS;
+	return stop_token_found ? ArgParseResult::STOP_TOKEN : ArgParseResult::SUCCESS;
 }
 
 std::string Parser::ArgParser::GetErrorMessage() const
@@ -653,6 +718,11 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 	return output.str();
 }
 
+const Parser::StopResult& Parser::ArgParser::GetStopResult() const
+{
+	return m_stop_result;
+}
+
 const Parser::Diagnostic& Parser::ArgParser::GetDiagnostics() const
 {
 	return m_error;
@@ -864,7 +934,15 @@ void Parser::ArgParser::FormatError()
 
 		break;
 	}
+	case Parser::Error::STOP_TOKEN_HAS_EQUALS_VALUE:
+	{
+		m_formatted_error =
+			"Error: subcommand '" +
+			m_error.arg_name +
+			"' does not accept a value.";
 
+		break;
+	}
 	default:
 	{
 		m_formatted_error = "Error: an unknown command-line error occurred.";

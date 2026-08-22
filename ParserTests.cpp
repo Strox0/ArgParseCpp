@@ -2240,6 +2240,281 @@ namespace parser_tests
 		CHECK_EQ(value.ValueRef().empty(), true);
 	}
 
+	TEST(StopTokensStoppingSuccess)
+	{
+		SimulatedArgv args{"--flag","--count","5","add"};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt("add");
+
+		auto& value = parser.Add<int>("--count").Required();
+		auto& flag = parser.AddFlag("--flag");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+		CHECK_EQ(value.Value(), 5);
+		CHECK_EQ(parser.GetStopResult().stop_token, "add");
+		CHECK_EQ(parser.GetStopResult().tokens.empty(), true);
+	}
+
+	TEST(StopTokensReturnsRemainingTokens)
+	{
+		SimulatedArgv args{
+			"--flag",
+			"--count", "5",
+			"add",
+			"--name", "John",
+			"--force"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt("add");
+
+		auto& value = parser.Add<int>("--count").Required();
+		auto& flag = parser.AddFlag("--flag");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+		CHECK_EQ(value.Value(), 5);
+		CHECK_EQ(flag.Value(), true);
+
+		const auto& stop = parser.GetStopResult();
+
+		CHECK_EQ(stop.stop_token, "add");
+		CHECK_EQ(stop.tokens.size(), 3);
+		CHECK_EQ(stop.tokens[0], "--name");
+		CHECK_EQ(stop.tokens[1], "John");
+		CHECK_EQ(stop.tokens[2], "--force");
+	}
+
+	TEST(StopTokenDoesNotConsumeFollowingTokens)
+	{
+		SimulatedArgv args{
+			"add",
+			"--count", "5",
+			"--unknown",
+			"hello"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt("add");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+
+		const auto& stop = parser.GetStopResult();
+
+		CHECK_EQ(stop.stop_token, "add");
+		CHECK_EQ(stop.tokens.size(), 4);
+		CHECK_EQ(stop.tokens[0], "--count");
+		CHECK_EQ(stop.tokens[1], "5");
+		CHECK_EQ(stop.tokens[2], "--unknown");
+		CHECK_EQ(stop.tokens[3], "hello");
+	}
+
+	TEST(StopTokenUsedAsArgumentValue)
+	{
+		SimulatedArgv args{
+			"--name=add",
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt("add");
+
+		auto& name = parser.Add<std::string>("--name").Required();
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::SUCCESS);
+		CHECK_EQ(name.Value(), "add");
+	}
+
+	TEST(RequiredArgumentBeforeStopTokenIsValidated)
+	{
+		SimulatedArgv args{
+			"add",
+			"--name", "John"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt("add");
+
+		parser.Add<int>("--count").Required();
+
+		CHECK_ERROR(parser,Error::MISSING_REQUIRED);
+	}
+
+	TEST(StopTokenAtEnd)
+	{
+		SimulatedArgv args{
+			"--count", "42",
+			"add"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt("add");
+
+		auto& count = parser.Add<int>("--count");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+		CHECK_EQ(count.Value(), 42);
+
+		const auto& stop = parser.GetStopResult();
+
+		CHECK_EQ(stop.stop_token, "add");
+		CHECK_EQ(stop.tokens.empty(), true);
+	}
+
+	TEST(TokensAfterStopAreNotParsedByParent)
+	{
+		SimulatedArgv args{
+			"--count", "5",
+			"add",
+			"--definitely-unknown",
+			"--count", "not-an-int"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt("add");
+
+		auto& count = parser.Add<int>("--count");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+		CHECK_EQ(count.Value(), 5);
+
+		const auto& stop = parser.GetStopResult();
+
+		CHECK_EQ(stop.tokens.size(), 3);
+		CHECK_EQ(stop.tokens[0], "--definitely-unknown");
+		CHECK_EQ(stop.tokens[1], "--count");
+		CHECK_EQ(stop.tokens[2], "not-an-int");
+	}
+
+	TEST(StopTokenAfterDoubleDashIsPositional)
+	{
+		SimulatedArgv args{
+			"--",
+			"add"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt("add");
+
+		auto& positional = parser.AddPositional<std::string>("value");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::SUCCESS);
+		CHECK_EQ(positional.Value(), "add");
+	}
+
+	TEST(MultipleStopTokensFirstMatches)
+	{
+		SimulatedArgv args{
+			"--count", "5",
+			"remove",
+			"item.txt"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt({ "list", "add", "remove" });
+
+		auto& count = parser.Add<int>("--count");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+		CHECK_EQ(count.Value(), 5);
+
+		const auto& stop = parser.GetStopResult();
+
+		CHECK_EQ(stop.stop_token, "remove");
+		CHECK_EQ(stop.tokens.size(), 1);
+		CHECK_EQ(stop.tokens[0], "item.txt");
+	}
+
+	TEST(TokensAfterStopMayContainOtherStopTokens)
+	{
+		SimulatedArgv args{
+			"add",
+			"remove",
+			"list"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt({ "list", "add", "remove" });
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+
+		const auto& stop = parser.GetStopResult();
+
+		CHECK_EQ(stop.stop_token, "add");
+		CHECK_EQ(stop.tokens.size(), 2);
+		CHECK_EQ(stop.tokens[0], "remove");
+		CHECK_EQ(stop.tokens[1], "list");
+	}
+
+	TEST(StopTokenSubcommandParseSuccess)
+	{
+		SimulatedArgv args{
+			"--verbose",
+			"add",
+			"--name", "John",
+			"--count", "3",
+			"--force"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt({ "list", "add", "remove" });
+
+		auto& verbose = parser.AddFlag("--verbose");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+		CHECK_EQ(verbose.Value(), true);
+
+		const auto& stop = parser.GetStopResult();
+
+		CHECK_EQ(stop.stop_token, "add");
+
+		Parser::ArgParser add_parser(stop);
+
+		auto& name = add_parser.Add<std::string>("--name").Required();
+		auto& count = add_parser.Add<int>("--count").Required();
+		auto& force = add_parser.AddFlag("--force");
+
+		CHECK_EQ(add_parser.ParseAndValidate(), Parser::ArgParseResult::SUCCESS);
+
+		CHECK_EQ(name.Value(), "John");
+		CHECK_EQ(count.Value(), 3);
+		CHECK_EQ(force.Value(), true);
+	}
+
+	TEST(StopTokenNestedParse)
+	{
+		SimulatedArgv args{
+			"add",
+			"--name", "John",
+			"advanced",
+			"--level", "5"
+		};
+
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.StopAt({ "add", "remove" });
+		
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+		CHECK_EQ(parser.GetStopResult().stop_token, "add");
+
+		Parser::ArgParser add_parser(parser.GetStopResult());
+		add_parser.StopAt("advanced");
+
+		auto& name = add_parser.Add<std::string>("--name");
+
+		CHECK_EQ(add_parser.ParseAndValidate(), Parser::ArgParseResult::STOP_TOKEN);
+		CHECK_EQ(name.Value(), "John");
+		CHECK_EQ(add_parser.GetStopResult().stop_token, "advanced");
+
+		Parser::ArgParser advanced_parser(add_parser.GetStopResult());
+
+		auto& level = advanced_parser.Add<int>("--level").Required();
+
+		CHECK_EQ(
+			advanced_parser.ParseAndValidate(),
+			Parser::ArgParseResult::SUCCESS
+		);
+
+		CHECK_EQ(level.Value(), 5);
+	}
+
 	// -----------------------------------------------------------------------------
 	// Full example-style integration test
 	// -----------------------------------------------------------------------------

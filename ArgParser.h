@@ -14,7 +14,8 @@
 #include <map>
 #include <stdexcept>
 #include <limits>
-#include <array>
+#include <span>
+#include <initializer_list>
 
 namespace Parser
 {
@@ -31,6 +32,7 @@ namespace Parser
 		UNKNOWN_ARGUMENT,
 		CARDINALITY_VALIDATION_FAIL,
 		FLAG_HAS_EQUALS_VALUE,
+		STOP_TOKEN_HAS_EQUALS_VALUE
 	};
 
 	enum class Cardinality
@@ -46,7 +48,8 @@ namespace Parser
 	{
 		SUCCESS,
 		ERROR,
-		HELP_REQUESTED
+		HELP_REQUESTED,
+		STOP_TOKEN
 	};
 
 	struct Diagnostic
@@ -93,6 +96,12 @@ namespace Parser
 
 		Result(bool b) : success(b) {};
 		Result(bool b, std::string s) : success(b),error_message(s) {};
+	};
+
+	struct StopResult
+	{
+		std::string_view stop_token;
+		std::span<std::string> tokens;
 	};
 
 	struct CardQueryRes
@@ -339,6 +348,7 @@ namespace Parser
 	{
 	public:
 		ArgParser(int argc, char** argv);
+		ArgParser(const StopResult& stop_result);
 		ArgParser() = delete;
 
 		template<typename T>
@@ -356,11 +366,14 @@ namespace Parser
 		Aggregate<T>& AddPositionalAggregate(const std::string& helper_name);
 
 		void Help(std::string_view help_msg);
+		void StopAt(const std::string& token);
+		void StopAt(std::initializer_list<std::string> tokens);
 
 		ArgParseResult ParseAndValidate();
 		const Diagnostic& GetDiagnostics() const;
 		std::string GetErrorMessage() const;
 		std::string GetHelpMessage(size_t max_line_width = 80, size_t max_label_width = 32) const;
+		const StopResult& GetStopResult() const;
 
 	private:
 		void FormatError();
@@ -378,13 +391,15 @@ namespace Parser
 			Aggregate,
 			Flag,
 			Positional,
-			AggregatePositional
+			AggregatePositional,
+			StopToken
 		};
 
 		std::vector<std::shared_ptr<ArgumentBase>> m_args;
 		std::vector<std::unique_ptr<ArgumentBase>> m_positionals;
 		std::unique_ptr<ArgumentBase> m_pos_aggregate;
 		std::vector<std::string> m_tokens;
+		StopResult m_stop_result;
 		Diagnostic m_error;
 		std::string m_formatted_error;
 		std::string m_help;
