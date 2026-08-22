@@ -531,9 +531,4 @@ These exceptions indicate programming errors rather than recoverable command-lin
 
 ## Roadmap
 
-Planned features:
-
-- Subcommands
-- Showing defaults in generated help
-- Showing aggregate cardinality in generated help
-- Colored help output
+Currently perceived to be feature complete.
