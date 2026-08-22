@@ -1436,6 +1436,7 @@ namespace parser_tests
 		parser.Add<int64_t>("--def2").Default(6658);
 		parser.Add<double>("--do").Default(55.5566);
 		parser.AddAggregate<int16_t>("--aggr").Default({12, 23, 34, 45, 56, 67});
+		parser.Add<std::string>("--str").Default("");
 		
 		const std::string help = parser.GetHelpMessage();
 		CHECK(help.find("default") != std::string::npos);
@@ -1443,6 +1444,7 @@ namespace parser_tests
 		CHECK(help.find("55.5566") != std::string::npos);
 		CHECK(help.find("required") != std::string::npos);
 		CHECK(help.find("12, 23, 34, 45, 56, 67") != std::string::npos);
+		CHECK(help.find("<null>") != std::string::npos);
 	}
 
 	TEST(HelpListsCardinality)

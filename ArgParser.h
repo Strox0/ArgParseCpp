@@ -98,10 +98,11 @@ namespace Parser
 		Result(bool b, std::string s) : success(b),error_message(s) {};
 	};
 
-	struct StopResult
+	struct StopResultView
 	{
 		std::string_view stop_token;
-		std::span<std::string> tokens;
+		std::span<const std::string> tokens;
+		std::string_view carry_name;
 	};
 
 	struct CardQueryRes
@@ -183,6 +184,7 @@ namespace Parser
 		bool IsRequired() const;
 		const std::vector<std::string>& GetAliases() const;
 		void Lock();
+		bool HasDefaultString() const;
 
 	protected:
 		virtual void Finalize(Diagnostic& diagnostic) = 0;
@@ -196,6 +198,7 @@ namespace Parser
 		bool m_has_default = false;
 		bool m_locked = false;
 		bool m_success = false;
+		bool m_has_default_str = false;
 		std::string m_value;
 		std::string m_name;
 		std::string m_meta;
@@ -348,7 +351,7 @@ namespace Parser
 	{
 	public:
 		ArgParser(int argc, char** argv);
-		ArgParser(const StopResult& stop_result);
+		ArgParser(const StopResultView& stop_result);
 		ArgParser() = delete;
 
 		template<typename T>
@@ -373,7 +376,7 @@ namespace Parser
 		const Diagnostic& GetDiagnostics() const;
 		std::string GetErrorMessage() const;
 		std::string GetHelpMessage(size_t max_line_width = 80, size_t max_label_width = 32) const;
-		const StopResult& GetStopResult() const;
+		const StopResultView& GetStopResult() const;
 
 	private:
 		void FormatError();
@@ -399,7 +402,7 @@ namespace Parser
 		std::vector<std::unique_ptr<ArgumentBase>> m_positionals;
 		std::unique_ptr<ArgumentBase> m_pos_aggregate;
 		std::vector<std::string> m_tokens;
-		StopResult m_stop_result;
+		StopResultView m_stop_result;
 		Diagnostic m_error;
 		std::string m_formatted_error;
 		std::string m_help;
@@ -565,6 +568,7 @@ namespace Parser
 			if constexpr (HasStringDefaultRef<T> || HasStringDefaultVal<T>)
 			{
 				m_default_str = StringDefault(default_value);
+				m_has_default_str = true;
 			}
 		}
 
@@ -832,6 +836,7 @@ namespace Parser
 			if constexpr (HasStringDefaultRef<T> || HasStringDefaultVal<T>)
 			{
 				m_default_str = VectorToString(default_value);
+				m_has_default_str = true;
 			}
 		}
 

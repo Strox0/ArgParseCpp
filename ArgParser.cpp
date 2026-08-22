@@ -24,9 +24,11 @@ Parser::ArgParser::ArgParser(int argc, char** argv)
 	}
 }
 
-Parser::ArgParser::ArgParser(const StopResult& stop_result)
+Parser::ArgParser::ArgParser(const StopResultView& stop_result)
 {
-	m_exe_name = stop_result.stop_token;
+	m_exe_name = stop_result.carry_name;
+	m_exe_name += ' ';
+	m_exe_name += stop_result.stop_token;
 	m_tokens.assign(stop_result.tokens.begin(), stop_result.tokens.end());
 }
 
@@ -154,6 +156,7 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 					m_stop_result.stop_token = token;
 					curr++;
 					m_stop_result.tokens = std::span<std::string>(curr, m_tokens.end());
+					m_stop_result.carry_name = m_exe_name;
 					stop_token_found = true;
 					break;
 				}
@@ -415,7 +418,7 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 
 				description += "(required";
 			}
-			else if (!argument.GetStringDefault().empty())
+			else if (argument.HasDefaultString())
 			{
 				requires_closing = true;
 				if (!description.empty())
@@ -424,7 +427,7 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 				}
 
 				description += "(default: ";
-				description += argument.GetStringDefault();
+				description += argument.GetStringDefault().empty() ? "<empty>" : argument.GetStringDefault();
 			}
 
 			if (type == ArgType::Aggregate || type == ArgType::AggregatePositional)
@@ -548,6 +551,9 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 	std::vector<std::string> required_options;
 	std::vector<std::string> optional_options;
 	std::vector<OptionRow> option_rows;
+	std::vector<HelpRow> subcommand_rows;
+
+	const std::string executable = m_exe_name.empty() ? "<program>" : m_exe_name;
 
 	optional_options.emplace_back("[--help]");
 	option_rows.push_back({
@@ -561,6 +567,15 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 	for (const auto& [canonical_name, typed_argument] : m_name_arg_map)
 	{
 		const ArgType type = typed_argument.first;
+		if (type == ArgType::StopToken)
+		{
+			subcommand_rows.push_back({
+				canonical_name,
+				"For more help, run '" + executable + " " + canonical_name + " --help'."
+				});
+			continue;
+		}
+
 		const ArgumentBase& argument = *typed_argument.second;
 
 		std::string usage = canonical_name;
@@ -634,9 +649,10 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 		usage_parts.push_back(std::move(token));
 	}
 
-	std::ostringstream output;
+	if (!subcommand_rows.empty())
+		usage_parts.push_back("[subcommand]");
 
-	const std::string executable = m_exe_name.empty() ? "<program>"	: m_exe_name;
+	std::ostringstream output;
 
 	const std::string usage_prefix = "Usage: " + executable;
 
@@ -701,6 +717,13 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 		output << '\n';
 	}
 
+	if (!subcommand_rows.empty())
+	{
+		output << "Subcommands:\n";
+		append_rows(output, subcommand_rows);
+		output << '\n';
+	}
+
 	if (!option_rows.empty())
 	{
 		std::vector<HelpRow> rows;
@@ -718,7 +741,7 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 	return output.str();
 }
 
-const Parser::StopResult& Parser::ArgParser::GetStopResult() const
+const Parser::StopResultView& Parser::ArgParser::GetStopResult() const
 {
 	return m_stop_result;
 }
@@ -1101,6 +1124,11 @@ const std::vector<std::string>& Parser::ArgumentBase::GetAliases() const
 void Parser::ArgumentBase::Lock()
 {
 	m_locked = true;
+}
+
+bool Parser::ArgumentBase::HasDefaultString() const
+{
+	return m_has_default_str;
 }
 
 void Parser::ArgumentBase::AddValue(std::string_view value)
