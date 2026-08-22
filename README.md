@@ -607,4 +607,5 @@ These exceptions indicate programming errors rather than recoverable command-lin
 
 ## Roadmap
 
-Currently perceived to be feature complete.
+Counting flags
+Mutually exclusive argument groups
