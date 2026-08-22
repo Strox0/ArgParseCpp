@@ -14,6 +14,7 @@ The library is configured through a fluent API and parses directly from `argc` a
 - `--name value` and `--name=value` syntax
 - The `--` end-of-options marker
 - Built-in `--help` and `-h` handling
+- Delegated subcommand parsing through stop tokens
 - Text transformations
 - Text, typed-value, and collection validation
 - Aggregate cardinality constraints
@@ -163,7 +164,7 @@ auto& includes = parser
 
 Named aggregates are greedy. They consume values until one of the following is encountered:
 
-- another registered argument name or alias;
+- another registered argument name, alias, or a stop token;
 - the `--` end-of-options marker;
 - the end of the command line.
 
@@ -199,6 +200,60 @@ auto& files = parser.AddPositionalAggregate<std::string>("files");
 
 Only one positional aggregate may be registered. It logically follows every scalar positional, regardless of when it was declared. If it is required, no optional scalar positional may precede it.
 
+## Subcommands
+
+ArgParser supports delegated subcommand parsing through stop tokens. Register each subcommand name with `StopAt()`:
+
+```cpp
+Parser::ArgParser parser(argc, argv);
+parser.Help("Manage projects.");
+parser.StopAt({ "add", "remove" });
+```
+
+When parsing encounters a registered stop token before `--`, it validates the arguments owned by the current parser and returns `ArgParseResult::STOP_TOKEN`. `GetStopResult()` identifies the token and provides the remaining command-line tokens to another parser:
+
+```cpp
+switch (parser.ParseAndValidate())
+{
+case Parser::ArgParseResult::HELP_REQUESTED:
+    std::cout << parser.GetHelpMessage();
+    return 0;
+
+case Parser::ArgParseResult::ERROR:
+    std::cerr << parser.GetErrorMessage() << '\n';
+    return 2;
+
+case Parser::ArgParseResult::SUCCESS:
+    // No subcommand was supplied.
+    return 0;
+
+case Parser::ArgParseResult::STOP_TOKEN:
+    break;
+}
+
+const Parser::StopResultView& stop = parser.GetStopResult();
+
+if (stop.stop_token == "add")
+{
+    Parser::ArgParser add_parser(stop);
+    add_parser.Help("Add a project.");
+
+    auto& name = add_parser
+        .AddPositional<std::string>("name")
+        .Required();
+
+    // Parse and handle add_parser here.
+}
+```
+
+`StopResultView` is non-owning and remains valid only while its source parser exists. The delegated-parser constructor copies the remaining tokens and command name, so the delegated parser is independent once construction finishes.
+
+`STOP_TOKEN` is a successful validation result for the current parser. Its registered argument and flag values follow the normal accessor rules.
+
+The same pattern can be repeated for nested subcommands. Delegated parsers retain the complete invocation name, so help for a nested parser uses names such as `app project add`. Parent help lists registered stop tokens under `Subcommands` and tells users to run `app subcommand --help` for command-specific help.
+
+Stop tokens must be nonempty, unique, free of `=`, and must not conflict with registered names, aliases, `--help`, `-h`, or `--`. Equals syntax is not valid for a stop token. For example, `add=value` produces `Error::STOP_TOKEN_HAS_EQUALS_VALUE` when `add` is registered as one.
+
 ## Configuring arguments
 
 Scalar arguments and aggregates support the following fluent configuration methods:
@@ -219,6 +274,8 @@ Aggregates additionally support `ValidateCollection()` and cardinality constrain
 
 Defaults are already typed values. Text transformations, text validators, and `Parse()` are therefore not applied to defaults. Typed validators still run. Aggregate defaults also undergo cardinality and collection validation.
 
+Generated help displays a default when ArgParser can convert it to text with `StringDefault()`. Built-in numeric and string types provide this conversion. An empty result is shown as `<empty>`.
+
 ### Aggregate cardinality
 
 ```cpp
@@ -238,6 +295,8 @@ Available constraints:
 | `Unlimited()` | No cardinality limit |
 
 Only one cardinality method may be selected. Counts must be greater than zero. An optional aggregate that is omitted and has no default skips cardinality validation.
+
+Generated help shows each aggregate's cardinality as `unlimited`, `exactly n`, `between min and max`, `at least n`, or `at most n`.
 
 ## Value access and parser lifecycle
 
@@ -412,6 +471,20 @@ The type can then be registered normally:
 auto& port = parser.Add<App::Port>("--port");
 ```
 
+To display typed defaults for a custom type in generated help, define `StringDefault()` in the same namespace:
+
+```cpp
+namespace App
+{
+    std::string StringDefault(const Port& value)
+    {
+        return std::to_string(value.value);
+    }
+}
+```
+
+Argument-dependent lookup finds this function in the same way as `Parse()`. If a custom type has no `StringDefault()` function, its default is still applied and validated but omitted from generated help. If the function returns an empty string, help displays `<empty>`.
+
 ## Names, aliases, and token boundaries
 
 ArgParser does not require registered names to begin with `-`. These are all structurally valid names:
@@ -432,7 +505,7 @@ After `--`, name recognition and built-in help recognition stop. Remaining token
 
 Because names are unrestricted, the parser cannot infer that every unfamiliar token beginning with `-` was intended to be an option. An unknown token may be consumed as a scalar value, aggregate value, or positional value when one of those destinations is active. `Error::UNKNOWN_ARGUMENT` means that no registered name or available positional destination accepted the token.
 
-A registered argument name cannot be supplied as a separate scalar/aggregate value because it acts as a token boundary. Users can use equals syntax to supply such a literal value:
+A registered argument name or stop token cannot be supplied as a separate scalar/aggregate value because it acts as a token boundary. Users can use equals syntax to supply such a literal value:
 
 ```text
 --label=--help
@@ -462,7 +535,7 @@ std::cout << parser.GetHelpMessage(100, 36);
 
 The first width controls the target line width. The second caps the option-label column width. Long individual words and the executable name may exceed the requested line width.
 
-Current help output includes usage, the application description, positional arguments, named arguments, aliases, meta-variable names, required markers, and built-in help. Displaying defaults and aggregate cardinality is planned but not currently implemented.
+Current help output includes usage, the application description, positional arguments, subcommands, named arguments, aliases, meta-variable names, required markers, displayable defaults, aggregate cardinality, and built-in help.
 
 ## Results and diagnostics
 
@@ -473,6 +546,7 @@ Current help output includes usage, the application description, positional argu
 | `ArgParseResult::SUCCESS` | Every supplied/defaulted value parsed and validated. |
 | `ArgParseResult::ERROR` | A command-line input error occurred. |
 | `ArgParseResult::HELP_REQUESTED` | `--help` or `-h` was encountered before `--`. |
+| `ArgParseResult::STOP_TOKEN` | A registered stop token was encountered and the current parser's arguments validated successfully. |
 
 After `ERROR`, use `GetErrorMessage()` for human-readable output or `GetDiagnostics()` for structured information:
 
@@ -510,6 +584,7 @@ Error categories are:
 - `UNKNOWN_ARGUMENT`
 - `CARDINALITY_VALIDATION_FAIL`
 - `FLAG_HAS_EQUALS_VALUE`
+- `STOP_TOKEN_HAS_EQUALS_VALUE`
 
 Formatted error wording is intended for people. Prefer `Diagnostic` and `Error` when program logic needs to distinguish failures.
 
@@ -519,6 +594,7 @@ Invalid parser configuration throws `std::logic_error`. Examples include:
 
 - duplicate or reserved names/aliases;
 - names or aliases containing `=`;
+- empty, conflicting, or `=`-containing stop tokens;
 - an empty positional helper name;
 - combining `Required()` and `Default()`;
 - configuring cardinality more than once;
