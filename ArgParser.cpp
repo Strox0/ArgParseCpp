@@ -335,21 +335,24 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 			return meta;
 		};
 
-	const auto make_description = [](const ArgumentBase& argument)
+	const auto make_description = [](const ArgType& type, const ArgumentBase& argument)
 		{
 			std::string description{ argument.GetHelp() };
 
+			bool requires_closing = false;
 			if (argument.IsRequired())
 			{
+				requires_closing = true;
 				if (!description.empty())
 				{
 					description += ' ';
 				}
 
-				description += "(required)";
+				description += "(required";
 			}
 			else if (!argument.GetStringDefault().empty())
 			{
+				requires_closing = true;
 				if (!description.empty())
 				{
 					description += ' ';
@@ -357,8 +360,42 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 
 				description += "(default: ";
 				description += argument.GetStringDefault();
-				description += ')';
 			}
+
+			if (type == ArgType::Aggregate || type == ArgType::AggregatePositional)
+			{
+				if (!requires_closing)
+					description += '(';
+				else
+					description += ", ";
+
+				requires_closing = true;
+
+				CardQueryRes cqr = argument.GetCardinality();
+				switch (cqr.card)
+				{
+				case Parser::Cardinality::UNLIMITED:
+					description += "unlimited";
+					break;
+				case Parser::Cardinality::BETWEEN:
+					description += "between " + std::to_string(cqr.min_count) + " and " + std::to_string(cqr.max_count);
+					break;
+				case Parser::Cardinality::EXACTLY:
+					description += "exactly " + std::to_string(cqr.exact_count);
+					break;
+				case Parser::Cardinality::ATLEAST:
+					description += "at least " + std::to_string(cqr.min_count);
+					break;
+				case Parser::Cardinality::ATMOST:
+					description += "at most " + std::to_string(cqr.max_count);
+					break;
+				default:
+					break;
+				}
+			}
+
+			if (requires_closing)
+				description += ')';
 
 			return description;
 		};
@@ -494,7 +531,7 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 			canonical_name,
 			{
 				std::move(label),
-				make_description(argument)
+				make_description(type,argument)
 			}
 			});
 	}
@@ -580,7 +617,7 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 	{
 		positional_rows.push_back({
 			std::string(positional->GetName()),
-			make_description(*positional)
+			make_description(ArgType::Positional, *positional)
 			});
 	}
 
@@ -588,7 +625,7 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 	{
 		positional_rows.push_back({
 			std::string(m_pos_aggregate->GetName()) + "...",
-			make_description(*m_pos_aggregate)
+			make_description(ArgType::AggregatePositional, *m_pos_aggregate)
 			});
 	}
 
@@ -966,6 +1003,11 @@ std::string_view Parser::ArgumentBase::GetMeta() const
 std::string_view Parser::ArgumentBase::GetStringDefault() const
 {
 	return m_default_str;
+}
+
+Parser::CardQueryRes Parser::ArgumentBase::GetCardinality() const
+{
+	return CardQueryRes(m_exact_count, m_min_count, m_max_count, m_card);
 }
 
 bool Parser::ArgumentBase::IsRequired() const

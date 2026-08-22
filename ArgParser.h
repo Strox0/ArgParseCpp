@@ -95,6 +95,17 @@ namespace Parser
 		Result(bool b, std::string s) : success(b),error_message(s) {};
 	};
 
+	struct CardQueryRes
+	{
+		size_t exact_count = 0;
+		size_t min_count = 0;
+		size_t max_count = 0;
+		Cardinality card = Cardinality::UNLIMITED;
+		CardQueryRes(size_t exact, size_t min, size_t max, Cardinality c) :
+			exact_count(exact), min_count(min), max_count(max), card(c)
+		{};
+	};
+
 	Result Parse(std::string_view v, int64_t& out);
 	Result Parse(std::string_view v, uint64_t& out);
 	Result Parse(std::string_view v, int32_t& out);
@@ -159,6 +170,7 @@ namespace Parser
 		std::string_view GetName() const;
 		std::string_view GetMeta() const;
 		std::string_view GetStringDefault() const;
+		CardQueryRes GetCardinality() const;
 		bool IsRequired() const;
 		const std::vector<std::string>& GetAliases() const;
 		void Lock();
@@ -180,6 +192,11 @@ namespace Parser
 		std::string m_meta;
 		std::string m_default_str;
 		std::vector<std::string> m_aliases;
+
+		size_t m_exact_count = 0;
+		size_t m_min_count = 0;
+		size_t m_max_count = 0;
+		Cardinality m_card = Cardinality::UNLIMITED;
 	};
 
 	template<Parseable T>
@@ -315,10 +332,6 @@ namespace Parser
 
 		std::vector<std::string> m_values;
 
-		size_t m_exact_count = 0;
-		size_t m_min_count = 0;
-		size_t m_max_count = 0;
-		Cardinality m_card = Cardinality::UNLIMITED;
 		bool m_card_set = false;
 	};
 
@@ -363,7 +376,9 @@ namespace Parser
 		{
 			Scalar,
 			Aggregate,
-			Flag
+			Flag,
+			Positional,
+			AggregatePositional
 		};
 
 		std::vector<std::shared_ptr<ArgumentBase>> m_args;

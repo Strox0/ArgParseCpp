@@ -1445,6 +1445,26 @@ namespace parser_tests
 		CHECK(help.find("12, 23, 34, 45, 56, 67") != std::string::npos);
 	}
 
+	TEST(HelpListsCardinality)
+	{
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.AddAggregate<int16_t>("--aggr").Default({ 64, 18 });
+		parser.AddAggregate<int32_t>("--aggr1").Exactly(5);
+		parser.AddAggregate<int64_t>("--aggr2").AtLeast(2);
+		parser.AddAggregate<double>("--aggr3").AtMost(3);
+		parser.AddAggregate<std::string>("--aggr4").Between(7, 9);
+
+		const std::string help = parser.GetHelpMessage();
+		CHECK(help.find("default") != std::string::npos);
+		CHECK(help.find("64, 18") != std::string::npos);
+		CHECK(help.find("exactly 5") != std::string::npos);
+		CHECK(help.find("at least 2") != std::string::npos);
+		CHECK(help.find("at most 3") != std::string::npos);
+		CHECK(help.find("between 7 and 9") != std::string::npos);
+		CHECK(help.find("unlimited") != std::string::npos);
+	}
+
 	TEST(HelpListsEveryArgumentKindPostParse)
 	{
 		SimulatedArgv args{ "--help" };
@@ -1468,7 +1488,7 @@ namespace parser_tests
 		CHECK(output.find("INPUT") != std::string::npos);
 		CHECK(output.find("Positional documentation.") != std::string::npos);
 		CHECK(output.find("--items") != std::string::npos);
-		CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
+		CHECK(output.find("Aggregate documentation.") != std::string::npos);
 		CHECK(output.find("--verbose") != std::string::npos);
 		CHECK(output.find("-V_ALIAS") != std::string::npos);
 		CHECK(output.find("Flag documentation.") != std::string::npos);
@@ -1495,7 +1515,7 @@ namespace parser_tests
 		CHECK(output.find("INPUT") != std::string::npos);
 		CHECK(output.find("Positional documentation.") != std::string::npos);
 		CHECK(output.find("--items") != std::string::npos);
-		CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
+		CHECK(output.find("Aggregate documentation.") != std::string::npos);
 		CHECK(output.find("--verbose") != std::string::npos);
 		CHECK(output.find("-V_ALIAS") != std::string::npos);
 		CHECK(output.find("Flag documentation.") != std::string::npos);
@@ -1528,7 +1548,7 @@ namespace parser_tests
 		output = parser.GetHelpMessage();
 
 		CHECK(output.find("--items") != std::string::npos);
-		CHECK(output.find("Aggregate documentation.\n") != std::string::npos);
+		CHECK(output.find("Aggregate documentation.") != std::string::npos);
 		CHECK(output.find("--verbose") != std::string::npos);
 		CHECK(output.find("-V_ALIAS") != std::string::npos);
 		CHECK(output.find("Flag documentation.") != std::string::npos);
