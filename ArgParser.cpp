@@ -2,16 +2,16 @@
 #include <iostream>
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
-#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <sstream>
-#include <cstddef>
 #include <iomanip>
 #include <utility>
+#include <unordered_set>
+#include <ios>
+#include <stdexcept>
 
 Parser::ArgParser::ArgParser(int argc, char** argv)
 {
@@ -347,6 +347,17 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 				}
 
 				description += "(required)";
+			}
+			else if (!argument.GetStringDefault().empty())
+			{
+				if (!description.empty())
+				{
+					description += ' ';
+				}
+
+				description += "(default: ";
+				description += argument.GetStringDefault();
+				description += ')';
 			}
 
 			return description;
@@ -952,6 +963,11 @@ std::string_view Parser::ArgumentBase::GetMeta() const
 	return m_meta;
 }
 
+std::string_view Parser::ArgumentBase::GetStringDefault() const
+{
+	return m_default_str;
+}
+
 bool Parser::ArgumentBase::IsRequired() const
 {
 	return m_required;
@@ -1040,33 +1056,12 @@ Parser::Result Parser::Parse(std::string_view v, uint16_t& out)
 
 Parser::Result Parser::Parse(std::string_view v, int8_t& out)
 {
-	int16_t value{};
-
-	Result r = Parser::ParseInteger(v, value);
-	if (!r)
-		return r;
-	if (value < INT8_MIN ||
-		value > INT8_MAX)
-	{
-		return Parser::Result::Failure("integer result out of range");
-	}
-
-	out = static_cast<int8_t>(value);
-	return Parser::Result::Success();
+	return Parser::ParseInteger(v, out);
 }
 
 Parser::Result Parser::Parse(std::string_view v, uint8_t& out)
 {
-	uint16_t value{};
-
-	Result r = Parser::ParseInteger(v, value);
-	if (!r)
-		return r;
-	if (value > UINT8_MAX)
-		return Parser::Result::Failure("integer result out of range");
-
-	out = static_cast<uint8_t>(value);
-	return Parser::Result::Success();
+	return Parser::ParseInteger(v, out);
 }
 
 Parser::Result Parser::Parse(std::string_view v, double& out)
@@ -1088,4 +1083,64 @@ Parser::Result Parser::Parse(std::string_view v, std::string& out)
 {
 	out.assign(v.data(), v.size());
 	return Parser::Result::Success();
+}
+
+std::string Parser::StringDefault(const int64_t in)
+{
+	return Parser::IntegerToString(in);
+}
+
+std::string Parser::StringDefault(const uint64_t in)
+{
+	return Parser::IntegerToString(in);
+}
+
+std::string Parser::StringDefault(const int32_t in)
+{
+	return Parser::IntegerToString(in);
+}
+
+std::string Parser::StringDefault(const uint32_t in)
+{
+	return Parser::IntegerToString(in);
+}
+
+std::string Parser::StringDefault(const int16_t in)
+{
+	return Parser::IntegerToString(in);
+}
+
+std::string Parser::StringDefault(const uint16_t in)
+{
+	return Parser::IntegerToString(in);
+}
+
+std::string Parser::StringDefault(const int8_t in)
+{
+	return Parser::IntegerToString(in);
+}
+
+std::string Parser::StringDefault(const uint8_t in)
+{
+	return Parser::IntegerToString(in);
+}
+
+std::string Parser::StringDefault(const double in)
+{
+	return Parser::FloatingPointToString(in);
+}
+
+std::string Parser::StringDefault(const long double in)
+{
+	return Parser::FloatingPointToString(in);
+}
+
+std::string Parser::StringDefault(const float in)
+{
+	return Parser::FloatingPointToString(in);
+}
+
+std::string Parser::StringDefault(const std::string& in)
+{
+	return in;
 }

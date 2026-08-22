@@ -1428,6 +1428,23 @@ namespace parser_tests
 		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::HELP_REQUESTED);
 	}
 
+	TEST(HelpListsDefault)
+	{
+		SimulatedArgv args{ "--help" };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		parser.Add<int64_t>("--def").Required();
+		parser.Add<int64_t>("--def2").Default(6658);
+		parser.Add<double>("--do").Default(55.5566);
+		parser.AddAggregate<int16_t>("--aggr").Default({12, 23, 34, 45, 56, 67});
+		
+		const std::string help = parser.GetHelpMessage();
+		CHECK(help.find("default") != std::string::npos);
+		CHECK(help.find("6658") != std::string::npos);
+		CHECK(help.find("55.5566") != std::string::npos);
+		CHECK(help.find("required") != std::string::npos);
+		CHECK(help.find("12, 23, 34, 45, 56, 67") != std::string::npos);
+	}
+
 	TEST(HelpListsEveryArgumentKindPostParse)
 	{
 		SimulatedArgv args{ "--help" };

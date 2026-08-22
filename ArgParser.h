@@ -7,14 +7,14 @@
 #include <system_error>
 #include <vector>
 #include <string>
-#include <unordered_set>
 #include <functional>
 #include <concepts>
 #include <utility>
 #include <unordered_map>
 #include <map>
 #include <stdexcept>
-#include <cstddef>
+#include <limits>
+#include <array>
 
 namespace Parser
 {
@@ -107,6 +107,19 @@ namespace Parser
 	Result Parse(std::string_view v, long double& out);
 	Result Parse(std::string_view v, float& out);
 	Result Parse(std::string_view v, std::string& out);
+	
+	std::string StringDefault(const int64_t in);
+	std::string StringDefault(const uint64_t in);
+	std::string StringDefault(const int32_t in);
+	std::string StringDefault(const uint32_t in);
+	std::string StringDefault(const int16_t in);
+	std::string StringDefault(const uint16_t in);
+	std::string StringDefault(const int8_t in);
+	std::string StringDefault(const uint8_t in);
+	std::string StringDefault(const double in);
+	std::string StringDefault(const long double in);
+	std::string StringDefault(const float in);
+	std::string StringDefault(const std::string& in);
 
 	template <typename T>
 	concept Parseable = requires(std::string_view v, T& out)
@@ -117,6 +130,18 @@ namespace Parser
 	&& std::is_copy_assignable_v<T>
 	&& std::is_copy_constructible_v<T>
 	&& !std::is_same_v<T,bool>;
+
+	template <typename T>
+	concept HasStringDefaultRef = requires(const T & in)
+	{
+		{ StringDefault(in) } -> std::convertible_to<std::string>;
+	};
+
+	template <typename T>
+	concept HasStringDefaultVal = requires (T in)
+	{
+		{ StringDefault(in) } -> std::convertible_to<std::string>;
+	};
 
 	class ArgParser;
 
@@ -133,6 +158,7 @@ namespace Parser
 		void AddAliases(const std::vector<std::string>& aliases);
 		std::string_view GetName() const;
 		std::string_view GetMeta() const;
+		std::string_view GetStringDefault() const;
 		bool IsRequired() const;
 		const std::vector<std::string>& GetAliases() const;
 		void Lock();
@@ -152,6 +178,7 @@ namespace Parser
 		std::string m_value;
 		std::string m_name;
 		std::string m_meta;
+		std::string m_default_str;
 		std::vector<std::string> m_aliases;
 	};
 
@@ -504,6 +531,11 @@ namespace Parser
 		{
 			m_default_val = default_value;
 			m_has_default = true;
+
+			if constexpr (HasStringDefaultRef<T> || HasStringDefaultVal<T>)
+			{
+				m_default_str = StringDefault(default_value);
+			}
 		}
 
 		return *this;
@@ -695,6 +727,59 @@ namespace Parser
 		return Parser::Result::Success();
 	}
 
+	template <typename T>
+	std::string IntegerToString(T value)
+	{
+		static_assert(std::is_integral_v<T>);
+
+		std::string buffer(std::numeric_limits<T>::digits10 + 3, 0);
+
+		const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, 10);
+
+		if (ec != std::errc{})
+			return std::string();
+
+		buffer.resize(ptr - buffer.data());
+		return buffer;
+	}
+
+	template <typename T>
+	std::string FloatingPointToString(T value)
+	{
+		static_assert(std::is_floating_point_v<T>);
+
+		std::string buffer(std::numeric_limits<T>::max_digits10 + 16,0);
+		
+		const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, std::chars_format::general);
+
+		if (ec != std::errc{})
+			return std::string();
+
+		buffer.resize(ptr - buffer.data());
+		return buffer;
+	}
+
+	template <typename T>
+	std::string VectorToString(const std::vector<T>& in)
+	{
+		std::string output = "[";
+
+		for (size_t i = 0; i < in.size(); ++i)
+		{
+			output += ' ';
+			output += StringDefault(in[i]);
+
+			if (i + 1 < in.size())
+				output += ',';
+			else
+				output += ' ';
+		}
+
+		output += ']';
+
+		return output;
+	}
+
 	template<Parseable T>
 	inline Aggregate<T>& Aggregate<T>::Default(const std::vector<T>& default_value)
 	{
@@ -713,6 +798,11 @@ namespace Parser
 		{
 			m_default_vals = default_value;
 			m_has_default = true;
+
+			if constexpr (HasStringDefaultRef<T> || HasStringDefaultVal<T>)
+			{
+				m_default_str = VectorToString(default_value);
+			}
 		}
 
 		return *this;
