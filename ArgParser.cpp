@@ -32,7 +32,7 @@ Parser::ArgParser::ArgParser(const StopResultView& stop_result)
 	m_tokens.assign(stop_result.tokens.begin(), stop_result.tokens.end());
 }
 
-Parser::Flag& Parser::ArgParser::AddFlag(const std::string& name, const std::vector<std::string>& aliases)
+Parser::Flag& Parser::ArgParser::AddFlag(const std::string& name, std::initializer_list<std::string> aliases)
 {
 	if (m_locked)
 		throw std::logic_error("No configuration functions can be called after ParseAndValidate");
@@ -1009,7 +1009,7 @@ void Parser::ArgParser::LockAndFailArgs()
 	}
 }
 
-void Parser::ArgParser::CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al)
+void Parser::ArgParser::CheckAndRegisterNames(const std::string& name, std::initializer_list<std::string> al)
 {
 	if (name.empty())
 		throw std::logic_error("Missing argument name");
@@ -1099,7 +1099,7 @@ void Parser::ArgumentBase::AddName(std::string_view name)
 	m_name = name;
 }
 
-void Parser::ArgumentBase::AddAliases(const std::vector<std::string>& aliases)
+void Parser::ArgumentBase::AddAliases(std::initializer_list<std::string> aliases)
 {
 	if (!aliases.empty())
 		m_aliases = aliases;

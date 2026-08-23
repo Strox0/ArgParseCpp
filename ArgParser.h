@@ -176,7 +176,7 @@ namespace Parser
 		Error GetError() const;
 		std::string_view GetHelp() const;
 		void AddName(std::string_view name);
-		void AddAliases(const std::vector<std::string>& aliases);
+		void AddAliases(std::initializer_list<std::string> aliases);
 		std::string_view GetName() const;
 		std::string_view GetMeta() const;
 		std::string_view GetStringDefault() const;
@@ -359,15 +359,15 @@ namespace Parser
 		ArgParser() = delete;
 
 		template<typename T>
-		Argument<T>& Add(const std::string& name, const std::vector<std::string>& aliases = {});
+		Argument<T>& Add(const std::string& name, std::initializer_list<std::string> aliases = {});
 
 		template<typename T>
 		Argument<T>& AddPositional(const std::string& helper_name);
 
 		template<typename T>
-		Aggregate<T>& AddAggregate(const std::string& name, const std::vector<std::string>& aliases = {});
+		Aggregate<T>& AddAggregate(const std::string& name, std::initializer_list<std::string> aliases = {});
 
-		Flag& AddFlag(const std::string& name, const std::vector<std::string>& aliases = {});
+		Flag& AddFlag(const std::string& name, std::initializer_list<std::string> aliases = {});
 
 		template <typename T>
 		Aggregate<T>& AddPositionalAggregate(const std::string& helper_name);
@@ -385,7 +385,7 @@ namespace Parser
 	private:
 		void FormatError();
 		void LockAndFailArgs();
-		void CheckAndRegisterNames(const std::string& name, const std::vector<std::string>& al);
+		void CheckAndRegisterNames(const std::string& name, std::initializer_list<std::string> al);
 		bool IsKnownName(const std::string& name);
 		bool ResolveName(std::string& name);
 		std::pair<std::string,std::string> ParseTokenWithEquals(const std::string& token, bool& has_value);
@@ -417,7 +417,7 @@ namespace Parser
 	};
 
 	template<typename T>
-	inline Argument<T>& ArgParser::Add(const std::string& name, const std::vector<std::string>& aliases)
+	inline Argument<T>& ArgParser::Add(const std::string& name, std::initializer_list<std::string> aliases)
 	{
 		if (m_locked)
 			throw std::logic_error("No configuration functions can be called after ParseAndValidate");
@@ -445,7 +445,7 @@ namespace Parser
 	}
 
 	template<typename T>
-	inline Aggregate<T>& ArgParser::AddAggregate(const std::string& name, const std::vector<std::string>& aliases)
+	inline Aggregate<T>& ArgParser::AddAggregate(const std::string& name, std::initializer_list<std::string> aliases)
 	{
 		if (m_locked)
 			throw std::logic_error("No configuration functions can be called after ParseAndValidate");
