@@ -1444,7 +1444,7 @@ namespace parser_tests
 		CHECK(help.find("55.5566") != std::string::npos);
 		CHECK(help.find("required") != std::string::npos);
 		CHECK(help.find("12, 23, 34, 45, 56, 67") != std::string::npos);
-		CHECK(help.find("<null>") != std::string::npos);
+		CHECK(help.find("<empty>") != std::string::npos);
 	}
 
 	TEST(HelpListsCardinality)
@@ -1479,6 +1479,7 @@ namespace parser_tests
 			.Unlimited()
 			.Help("Aggregate documentation.");
 		parser.AddFlag("--verbose", { "-V_ALIAS" }).Help("Flag documentation.");
+		parser.AddFlag("--counting", { "-c" }).Help("Flag counting.").Counting();
 
 		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::HELP_REQUESTED);
 
@@ -1494,6 +1495,8 @@ namespace parser_tests
 		CHECK(output.find("--verbose") != std::string::npos);
 		CHECK(output.find("-V_ALIAS") != std::string::npos);
 		CHECK(output.find("Flag documentation.") != std::string::npos);
+		CHECK(output.find("repeatable") != std::string::npos);
+		CHECK(output.find("--counting...") != std::string::npos);
 	}
 
 	TEST(HelpListsEveryArgumentKindPreParse)
@@ -2515,6 +2518,46 @@ namespace parser_tests
 		);
 
 		CHECK_EQ(level.Value(), 5);
+	}
+
+	TEST(CountingFlag)
+	{
+		SimulatedArgv args{"-f","-f","-f"};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& f = parser.AddFlag("-f").Counting();
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::SUCCESS);
+
+		CHECK_EQ(f.Count(), 3);
+		CHECK_EQ(f.Value(), true);
+	}
+
+	TEST(CountingFlagAndNormalFlags)
+	{
+		SimulatedArgv args{ "-f","-f","-f","-n"};
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& f = parser.AddFlag("-f").Counting();
+		auto& n = parser.AddFlag("-n");
+		auto& g = parser.AddFlag("-g");
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::SUCCESS);
+
+		CHECK_EQ(f.Count(), 3);
+		CHECK_EQ(n.Value(), true);
+		CHECK_EQ(n.Count(), 1);
+		CHECK_EQ(g.Value(), false);
+		CHECK_EQ(g.Count(), 0);
+	}
+
+	TEST(CountingFlagWithAlias)
+	{
+		SimulatedArgv args{ "-f","-f","--flag", };
+		Parser::ArgParser parser(args.argc(), args.argv());
+		auto& f = parser.AddFlag("-f", {"--flag"}).Counting();
+
+		CHECK_EQ(parser.ParseAndValidate(), Parser::ArgParseResult::SUCCESS);
+
+		CHECK_EQ(f.Count(), 3);
 	}
 
 	// -----------------------------------------------------------------------------

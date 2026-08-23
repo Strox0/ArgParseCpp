@@ -234,7 +234,10 @@ Parser::ArgParseResult Parser::ArgParser::ParseAndValidate()
 						FormatError();
 						return ArgParseResult::ERROR;
 					}
-					((Flag&)arg).SetTrue();
+					if (arg.IsCounting())
+						((Flag&)arg).Increment();
+					else
+						((Flag&)arg).SetTrue();
 					break;
 				}
 			}
@@ -462,6 +465,12 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 				}
 			}
 
+			if (type == ArgType::Flag && argument.IsCounting())
+			{
+				description += "(repeatable";
+				requires_closing = true;
+			}
+
 			if (requires_closing)
 				description += ')';
 
@@ -596,6 +605,11 @@ std::string Parser::ArgParser::GetHelpMessage(size_t max_line_width, size_t max_
 				usage += "...";
 				label += "...";
 			}
+		}
+		else
+		{
+			if (argument.IsCounting())
+				usage += "...";
 		}
 
 		if (argument.IsRequired())
@@ -1131,6 +1145,11 @@ bool Parser::ArgumentBase::HasDefaultString() const
 	return m_has_default_str;
 }
 
+bool Parser::ArgumentBase::IsCounting() const
+{
+	return m_counting;
+}
+
 void Parser::ArgumentBase::AddValue(std::string_view value)
 {
 	if (m_required && m_error == Error::MISSING_REQUIRED)
@@ -1145,7 +1164,15 @@ bool Parser::Flag::Value() const
 	if (!m_locked || !m_success)
 		throw std::logic_error("Value called in an invalid state");
 
-	return m_state;
+	return m_count;
+}
+
+uint32_t Parser::Flag::Count() const
+{
+	if (!m_locked || !m_success)
+		throw std::logic_error("Count called in an invalid state");
+
+	return m_count;
 }
 
 Parser::Flag& Parser::Flag::Help(std::string_view help_msg)
@@ -1154,6 +1181,15 @@ Parser::Flag& Parser::Flag::Help(std::string_view help_msg)
 		throw std::logic_error("Argument cannot be configured after ParseAndValidate");
 
 	m_help = help_msg;
+	return *this;
+}
+
+Parser::Flag& Parser::Flag::Counting()
+{
+	if (m_locked)
+		throw std::logic_error("Argument cannot be configured after ParseAndValidate");
+
+	m_counting = true;
 	return *this;
 }
 
@@ -1169,7 +1205,13 @@ void Parser::Flag::Finalize(Diagnostic& d)
 void Parser::Flag::SetTrue()
 {
 	if (!m_locked)
-		m_state = true;
+		m_count = 1;
+}
+
+void Parser::Flag::Increment()
+{
+	if (!m_locked)
+		m_count += 1;
 }
 
 Parser::Result Parser::Parse(std::string_view v, int64_t& out)

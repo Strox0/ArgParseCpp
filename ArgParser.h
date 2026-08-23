@@ -185,6 +185,7 @@ namespace Parser
 		const std::vector<std::string>& GetAliases() const;
 		void Lock();
 		bool HasDefaultString() const;
+		bool IsCounting() const;
 
 	protected:
 		virtual void Finalize(Diagnostic& diagnostic) = 0;
@@ -199,6 +200,7 @@ namespace Parser
 		bool m_locked = false;
 		bool m_success = false;
 		bool m_has_default_str = false;
+		bool m_counting = false;
 		std::string m_value;
 		std::string m_name;
 		std::string m_meta;
@@ -263,9 +265,10 @@ namespace Parser
 	{
 	public:
 		Flag() = default;
-		Flag(bool b) : m_state(b) {};
 		bool Value() const;
+		uint32_t Count() const;
 		Flag& Help(std::string_view help_msg);
+		Flag& Counting();
 
 	protected:
 		void Finalize(Diagnostic& d) override;
@@ -274,7 +277,8 @@ namespace Parser
 	private:
 		friend ArgParser;
 		void SetTrue();
-		bool m_state = false;
+		void Increment();
+		uint32_t m_count = 0;
 	};
 
 	template <Parseable T>
